@@ -1,0 +1,191 @@
+# Frequently Asked Questions (FAQ)
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(admiral)
+library(dplyr)
+```
+
+## General Questions
+
+### What is `{admiral}`?
+
+`{admiral}` (**A**DaM in **R** **A**sset **L**ibrary) is an open-source R
+package for the creation of ADaM datasets. It provides a modular collection
+of functions that follow CDISC ADaM standards. The package is developed and
+maintained by the [pharmaverse](https://pharmaverse.org/) community.
+
+### Where can I get help?
+
+-   [admiral Slack channel](https://pharmaverse.slack.com/) — post in
+    `#admiral` for questions and discussion.
+-   [GitHub Issues](https://github.com/pharmaverse/admiral/issues) — to
+    report bugs or request new features.
+-   [This book](https://pharmaverse.github.io/admiral-book/) — for
+    worked examples and concepts.
+
+### How do I get started?
+
+Start with the [Introduction](introduction.qmd) chapter of this book,
+which walks through the main ideas of `{admiral}` with worked examples.
+Then work through the [ADaM Data Structures](adam_structures.qmd) chapters
+for the dataset types you need.
+
+You can also use the template scripts provided by `{admiral}`:
+
+```{r list-templates}
+list_all_templates()
+```
+
+---
+
+## Programming Questions
+
+### Why do `{admiral}` functions use `exprs()` instead of character strings?
+
+`{admiral}` uses the `{rlang}` expressions framework so that variable
+names can be used directly (without quotes) in function arguments. This
+makes code more readable and allows `{admiral}` functions to evaluate
+expressions in the context of the input dataset.
+
+For a detailed explanation, see the
+[Expressions in Scripts](concepts_conventions.qmd#exprs) section of the
+[Programming Concepts and Conventions](concepts_conventions.qmd) chapter.
+
+### How do I handle missing values from SAS datasets?
+
+When reading SAS datasets with `{haven}`, SAS character missing values
+(`""`) are **not** automatically converted to R `NA`. You must call
+`convert_blanks_to_na()` on each dataset before any `{admiral}` processing:
+
+```r
+dm <- haven::read_sas("dm.sas7bdat") |>
+  convert_blanks_to_na()
+```
+
+See [Handling of Missing Values](concepts_conventions.qmd#missing) for
+full details.
+
+### Why does `filter_add = my_expression` fail?
+
+If `my_expression` is an R object *containing* an expression (rather than
+an expression itself), you need to unquote it with `!!`:
+
+```{r faq-expressions}
+#| error: true
+library(rlang)
+my_expression <- expr(VSTESTCD == "WEIGHT")
+
+vs <- dplyr::tribble(
+  ~USUBJID, ~VSTESTCD, ~VISIT,
+  "01",     "WEIGHT",  "SCREENING"
+)
+dm <- dplyr::tribble(~USUBJID, ~AGE, "01", 18)
+
+# This fails:
+try(
+  derive_vars_merged(
+    dm,
+    dataset_add = select(vs, USUBJID, VSTESTCD, VISIT),
+    by_vars     = exprs(USUBJID),
+    filter_add  = my_expression
+  ),
+  silent = TRUE
+)
+
+# This works:
+derive_vars_merged(
+  dm,
+  dataset_add = select(vs, USUBJID, VSTESTCD, VISIT),
+  by_vars     = exprs(USUBJID),
+  filter_add  = !!my_expression
+)
+```
+
+For more details, see [Common Pitfalls](concepts_conventions.qmd#pitfalls).
+
+### How do I apply a derivation to only some records?
+
+Use `restrict_derivation()` to apply a derivation only to records matching
+a filter condition:
+
+```r
+adae |>
+  restrict_derivation(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(USUBJID),
+      order   = exprs(ASTDTM, AESEQ),
+      new_var = AOCCIFL,
+      mode    = "first"
+    ),
+    filter = TRTEMFL == "Y"
+  )
+```
+
+See [Higher Order Functions](higher_order.qmd) for details.
+
+### How do I apply different imputation rules for different records?
+
+Use `slice_derivation()` to apply different arguments to different
+subsets of the data:
+
+```r
+vs |>
+  slice_derivation(
+    derivation = derive_vars_dtm,
+    args = params(dtc = VSDTC, new_vars_prefix = "A"),
+    derivation_slice(
+      filter = VSTPT == "PRE-DOSE",
+      args   = params(time_imputation = "first")
+    ),
+    derivation_slice(
+      filter = TRUE,
+      args   = params(time_imputation = "last")
+    )
+  )
+```
+
+See [Date/Time Imputation](imputation.qmd) and
+[Higher Order Functions](higher_order.qmd) for details.
+
+---
+
+## Data and Package Questions
+
+### What test data does `{admiral}` use?
+
+`{admiral}` uses SDTM and ADaM datasets from the
+[`{pharmaversesdtm}`](https://pharmaverse.github.io/pharmaversesdtm/)
+package, which contains data from the CDISC Pilot Study. These datasets
+are used in all worked examples in this book.
+
+### Does `{admiral}` support CDISC standards?
+
+Yes. `{admiral}` is designed to follow the CDISC ADaM Implementation
+Guide (ADaMIG v1.3). Each derivation function is designed to produce
+output consistent with the ADaMIG requirements.
+
+### How do I add metadata and export to XPT?
+
+Use the following packages as a final step after `{admiral}` derivations:
+
+-   [`{metacore}`](https://atorus-research.github.io/metacore/) — manage
+    metadata specifications.
+-   [`{metatools}`](https://pharmaverse.github.io/metatools/) — apply
+    metadata to datasets.
+-   [`{xportr}`](https://atorus-research.github.io/xportr/) — convert
+    R data frames to transport v5 (XPT) files.
+
+See the [pharmaverse E2E example](https://pharmaverse.github.io/examples/)
+for a complete end-to-end workflow.
+
+---
+
+## See Also
+
+-   [Introduction to admiral](introduction.qmd)
+-   [Programming Concepts and Conventions](concepts_conventions.qmd)
+-   [Higher Order Functions](higher_order.qmd)
+-   [pharmaverse website](https://pharmaverse.org/)

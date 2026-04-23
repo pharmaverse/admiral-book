@@ -1,0 +1,303 @@
+# Date and Time Imputation
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+This chapter is broken into three major sections. The first section
+briefly explores the imputation rules used in `{admiral}`. The second
+section focuses on imputation functions that work on vectors, with small
+examples to explore the imputation rules. These **vector-based**
+functions form the backbone of `{admiral}`'s more powerful functions
+`derive_vars_dt()` and `derive_vars_dtm()` for building ADaM datasets.
+The final section provides more detailed examples that a user might face
+while working on ADaMs needing `*DT` and `*DTM` variables.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(lubridate)
+library(tibble)
+library(dplyr)
+```
+
+## Imputation Rules
+
+Date and time is collected in SDTM as character values using the extended
+[ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) format — for example,
+`"2019-10-09T13:42:00"`. The format allows some parts of the date or time
+to be missing, e.g. `"2019-10"` if the day and time are unknown.
+
+ADaM timing variables like `ADTM` or `ADY` are numeric and can only be
+derived if the date or datetime is complete. Therefore `{admiral}`
+provides imputation functions which fill in missing date or time parts
+according to configurable imputation rules.
+
+The key concept is **Highest Imputation**, controlled by the
+`highest_imputation` argument. This argument controls which components of
+the `--DTC` value are imputed if they are missing.
+
+-   Default for `_dtm()` functions: `"h"` (hours).
+-   Default for `_dt()` functions: `"n"` (no imputation).
+
+::: callout-warning
+If a component at a higher level than `highest_imputation` is missing,
+`NA_character_` is returned. For example, for `highest_imputation = "D"`
+a value of `"2020"` results in `NA_character_` because the month is
+missing.
+:::
+
+## Vector-Based Imputation
+
+### Basic Imputation
+
+```{r basic-imputation}
+impute_dtc_dtm(
+  "2019-10",
+  highest_imputation = "M",
+  date_imputation    = "01-01",
+  time_imputation    = "00:00:00"
+)
+```
+
+Using `"first"` or `"last"` avoids invalid dates (e.g. February 31st):
+
+```{r first-last}
+impute_dtc_dtm(
+  "2019-02",
+  highest_imputation = "M",
+  date_imputation    = "last",
+  time_imputation    = "00:00:00"
+)
+```
+
+The `"mid"` keyword imputes missing day to `15`, or missing day and month
+to `06-30`:
+
+```{r mid}
+dates <- c("2019-02", "2019", "2019---01")
+
+impute_dtc_dtm(
+  dates,
+  highest_imputation = "M",
+  date_imputation    = "mid",
+  time_imputation    = "00:00:00",
+  preserve           = FALSE
+)
+```
+
+### Imputation Level
+
+The `highest_imputation` argument controls which components are imputed:
+
+```{r imputation-level}
+dates <- c(
+  "2019-02-03T12:30:15",
+  "2019-02-03T12:30",
+  "2019-02-03",
+  "2019-02",
+  "2019"
+)
+
+# Do not impute
+impute_dtc_dtm(dates, highest_imputation = "n")
+
+# Impute time only (hours, minutes, seconds)
+impute_dtc_dtm(dates, highest_imputation = "h")
+
+# Impute days and time
+impute_dtc_dtm(dates, highest_imputation = "D")
+
+# Impute date (months and days) and time
+impute_dtc_dtm(dates, highest_imputation = "M")
+```
+
+### Minimum and Maximum Dates
+
+In some scenarios the imputed date should not be before or after certain
+dates (e.g. data cut-off or death date). Use the `min_dates` and
+`max_dates` arguments:
+
+```{r min-max-dates}
+impute_dtc_dtm(
+  "2019-02",
+  highest_imputation = "M",
+  date_imputation    = "last",
+  time_imputation    = "last",
+  max_dates          = list(ymd("2019-01-14"), ymd("2019-02-25"))
+)
+```
+
+Completely missing dates can also be imputed when `min_dates` or
+`max_dates` is specified and `highest_imputation = "Y"`:
+
+```{r year-imputation}
+impute_dtc_dtm(
+  c("2019-02", NA),
+  highest_imputation = "Y",
+  date_imputation    = "last",
+  time_imputation    = "last",
+  max_dates          = list(
+    ymd("2019-01-14", NA),
+    ymd("2019-02-25", "2020-01-01")
+  )
+)
+```
+
+## Imputation Flags
+
+ADaM requires that imputed date or datetime variables are accompanied by
+date/time imputation flag variables (`*DTF` and `*TMF`). These variables
+indicate the highest level that was imputed. The `{admiral}` functions
+that derive imputed variables also add the corresponding imputation flag
+variables automatically.
+
+::: callout-note
+The `ignore_seconds_flag` argument can be set to `FALSE` when seconds
+are expected, as per the ADaM IG: if only hours and minutes are ever
+collected and seconds are imputed as `00`, it is not necessary to set
+`*TMF` to `"S"`.
+:::
+
+## `{admiral}` Imputation Functions
+
+| Function | Description |
+|---|---|
+| `derive_vars_dt()` | Derives a date variable and optional date imputation flag |
+| `derive_vars_dtm()` | Derives a datetime variable plus date and time imputation flags |
+| `impute_dtc_dtm()` | Returns a complete ISO 8601 datetime or `NA` |
+| `impute_dtc_dt()` | Returns a complete ISO 8601 date or `NA` |
+| `convert_dtc_to_dt()` | Returns a date if the ISO 8601 date is complete |
+| `convert_dtc_to_dtm()` | Returns a datetime if the ISO 8601 date is complete |
+| `compute_dtf()` | Returns the date imputation flag |
+| `compute_tmf()` | Returns the time imputation flag |
+
+## Examples
+
+### Create an Imputed Datetime Variable
+
+```{r derive-dtm}
+ae <- tribble(
+  ~AESTDTC,
+  "2019-08-09T12:34",
+  "2019-04-12",
+  "2010-09",
+  NA_character_
+) |>
+  derive_vars_dtm(
+    dtc                = AESTDTC,
+    new_vars_prefix    = "AST",
+    highest_imputation = "M",
+    date_imputation    = "first",
+    time_imputation    = "first"
+  ) |>
+  derive_vars_dtm_to_dt(exprs(ASTDTM))
+
+ae
+```
+
+### Create an Imputed Date Variable
+
+```{r derive-dt}
+ae2 <- tribble(
+  ~AESTDTC,
+  "2019-08-09T12:34:00",
+  "2019-04-12",
+  "2010-09",
+  NA_character_
+) |>
+  derive_vars_dt(
+    dtc                = AESTDTC,
+    new_vars_prefix    = "AST",
+    highest_imputation = "M",
+    date_imputation    = "first"
+  )
+
+ae2
+```
+
+### Avoid Imputed Dates Before Treatment Start
+
+To avoid imputed AE start dates before treatment start, specify
+`TRTSDTM` for `min_dates`:
+
+```{r min-dates}
+ae3 <- tribble(
+  ~AESTDTC,           ~TRTSDTM,
+  "2019-08-09T12:34", ymd_hm("2019-11-11T12:34"),
+  "2019-10",          ymd_hm("2019-11-11T12:34"),
+  "2019-11",          ymd_hm("2019-11-11T12:34"),
+  "2019-12-04",       ymd_hm("2019-11-11T12:34")
+) |>
+  derive_vars_dtm(
+    dtc                = AESTDTC,
+    new_vars_prefix    = "AST",
+    highest_imputation = "M",
+    date_imputation    = "first",
+    time_imputation    = "first",
+    min_dates          = exprs(TRTSDTM)
+  )
+
+ae3
+```
+
+### Avoid Imputed Dates After Data Cut-off or Death
+
+```{r max-dates}
+ae4 <- tribble(
+  ~AEENDTC,           ~DTHDT,           ~DCUTDT,
+  "2019-08-09T12:34", ymd("2019-11-11"), ymd("2019-12-02"),
+  "2019-11",          ymd("2019-11-11"), ymd("2019-12-02"),
+  "2019-12",          NA,                ymd("2019-12-02"),
+  "2019-12-04",       NA,                ymd("2019-12-02")
+) |>
+  derive_vars_dtm(
+    dtc                = AEENDTC,
+    new_vars_prefix    = "AEN",
+    highest_imputation = "M",
+    date_imputation    = "last",
+    time_imputation    = "last",
+    max_dates          = exprs(DTHDT, DCUTDT)
+  )
+
+ae4
+```
+
+### Using Multiple Imputation Rules via `slice_derivation()`
+
+```{r slice-derivation}
+vs <- tribble(
+  ~VSDTC,              ~VSTPT,
+  "2019-08-09T12:34", NA,
+  "2019-10-12",       "PRE-DOSE",
+  "2019-11-10",       NA,
+  "2019-12-04",       NA
+) |>
+  slice_derivation(
+    derivation = derive_vars_dtm,
+    args = params(
+      dtc             = VSDTC,
+      new_vars_prefix = "A"
+    ),
+    derivation_slice(
+      filter = VSTPT == "PRE-DOSE",
+      args   = params(time_imputation = "first")
+    ),
+    derivation_slice(
+      filter = TRUE,
+      args   = params(time_imputation = "last")
+    )
+  )
+
+vs
+```
+
+## See Also
+
+-   [Creating ADSL](adsl.qmd)
+-   [Creating an OCCDS ADaM](occds.qmd)
+-   [Higher Order Functions](higher_order.qmd)

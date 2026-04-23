@@ -1,0 +1,205 @@
+# Antibody Data (ADAB)
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+Anti-drug antibody (ADA) analyses are performed to assess the
+immunogenicity of biologic drugs. The `ADAB` dataset contains
+antibody titre and associated analysis variables derived from the `PC`
+or `IS` (Immunogenicity Specimen Assessments) SDTM domains.
+
+Common ADA parameters include:
+
+-   Titre of anti-drug antibodies (ADA titre)
+-   Treatment-emergent ADA status (`TEADAFL`)
+-   Persistent ADA status (`PERSAFL`)
+-   Neutralising antibody status (`NABFL`)
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(tibble)
+library(lubridate)
+library(pharmaversesdtm)
+```
+
+## Programming Workflow
+
+1.  [Read in Data](#readdata)
+2.  [Derive Parameters](#params)
+3.  [Derive ADA Flags](#flags)
+4.  [Add ADSL Variables](#adsl_vars)
+5.  [Derive Analysis Sequence Number](#aseq)
+
+## Read in Data {#readdata}
+
+```{r load-data}
+# Using PC domain as a proxy for antibody titre data
+# (pharmaversesdtm does not include IS domain)
+pc   <- pharmaversesdtm::pc   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+
+# Filter to relevant subjects
+ab_subjects <- unique(pc$USUBJID)[1:4]
+pc_sub  <- pc   |> filter(USUBJID %in% ab_subjects)
+adsl_sub <- adsl |> filter(USUBJID %in% ab_subjects)
+```
+
+## Derive Parameters {#params}
+
+```{r params}
+adab <- pc_sub |>
+  derive_vars_dtm(
+    dtc             = PCDTC,
+    new_vars_prefix = "A",
+    flag_imputation = "none"
+  ) |>
+  mutate(
+    PARAMCD = PCTESTCD,
+    PARAM   = PCTEST,
+    AVAL    = PCSTRESN,
+    AVALC   = PCSTRESC,
+    AVALU   = PCSTRESU,
+    AVISIT  = VISIT,
+    AVISITN = VISITNUM
+  ) |>
+  derive_vars_merged(
+    dataset_add = adsl_sub,
+    new_vars    = exprs(TRTSDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+adab |>
+  select(USUBJID, PARAMCD, PARAM, AVAL, AVALC, ADTM, AVISIT) |>
+  head(8)
+```
+
+## Derive ADA Flags {#flags}
+
+### Baseline ADA Status
+
+Identify subjects who are ADA positive at baseline (pre-treatment):
+
+```{r baseline}
+adab <- adab |>
+  mutate(
+    # Flag pre-dose / screening records
+    PREABAFL = if_else(
+      !is.na(TRTSDT) & as.Date(ADTM) <= TRTSDT & !is.na(AVAL),
+      "Y",
+      NA_character_
+    )
+  )
+
+adab |>
+  select(USUBJID, ADTM, TRTSDT, PARAMCD, AVAL, PREABAFL) |>
+  head(5)
+```
+
+### Treatment-Emergent ADA (TEADA) Flag
+
+A subject has treatment-emergent ADA if they are ADA-negative at
+baseline but ADA-positive post-dose, or if their post-dose titre is
+≥ 4-fold greater than their baseline titre:
+
+```{r teada}
+adab <- adab |>
+  # Derive baseline titre
+  restrict_derivation(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(STUDYID, USUBJID, PARAMCD),
+      order   = exprs(ADTM),
+      new_var = ABLFL,
+      mode    = "last"
+    ),
+    filter = !is.na(AVAL) & as.Date(ADTM) <= TRTSDT
+  ) |>
+  derive_var_base(
+    by_vars    = exprs(STUDYID, USUBJID, PARAMCD),
+    source_var = AVAL,
+    new_var    = BASE
+  ) |>
+  mutate(
+    # Simplified TEADA logic (treatment-emergent = post-dose positive)
+    TEADAFL = if_else(
+      as.Date(ADTM) > TRTSDT & !is.na(AVAL) & AVAL > 0,
+      "Y",
+      NA_character_
+    )
+  )
+
+adab |>
+  filter(!is.na(TEADAFL)) |>
+  select(USUBJID, ADTM, TRTSDT, PARAMCD, AVAL, BASE, TEADAFL) |>
+  head(5)
+```
+
+### Subject-Level ADA Summary Flags
+
+Subject-level flags are merged into `ADSL`:
+
+```{r subject-flags}
+adab_subj <- adab |>
+  filter(TEADAFL == "Y") |>
+  distinct(STUDYID, USUBJID) |>
+  mutate(ADAAFLG = "Y")
+
+adsl_sub <- adsl_sub |>
+  left_join(adab_subj, by = c("STUDYID", "USUBJID"))
+
+adsl_sub |>
+  select(USUBJID, ADAAFLG) |>
+  head(5)
+```
+
+## Add ADSL Variables {#adsl_vars}
+
+```{r adsl-vars}
+adab <- adab |>
+  derive_vars_merged(
+    dataset_add = adsl_sub,
+    new_vars    = exprs(TRT01A, TRT01P, AGE, SEX),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+adab |>
+  select(USUBJID, PARAMCD, AVAL, TRT01A, AGE, SEX) |>
+  head(5)
+```
+
+## Derive Analysis Sequence Number {#aseq}
+
+```{r aseq}
+adab <- adab |>
+  derive_var_obs_number(
+    by_vars    = exprs(STUDYID, USUBJID),
+    order      = exprs(PARAMCD, ADTM),
+    new_var    = ASEQ,
+    check_type = "error"
+  )
+
+adab |>
+  select(USUBJID, PARAMCD, ADTM, ASEQ) |>
+  head(5)
+```
+
+## Example Script
+
+An ADAB template script is available in the `{admiral}` package:
+
+```r
+use_ad_template("ADAB")
+```
+
+## See Also
+
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)
+-   [PK NCA](pk_adnca.qmd)
+-   [Date/Time Imputation](imputation.qmd)

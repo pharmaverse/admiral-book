@@ -1,0 +1,171 @@
+# Questionnaires
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+Many clinical trials collect patient-reported outcomes (PROs) and
+clinical outcome assessments (COAs) via questionnaires. The responses
+are stored in SDTM QS (Questionnaire) datasets and are used to derive
+composite scores in the corresponding ADaM dataset (e.g. `ADQS`).
+
+`{admiral}` provides `derive_summary_records()` for aggregating item-level
+responses into composite scores.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(tibble)
+library(pharmaversesdtm)
+library(lubridate)
+```
+
+## Typical Questionnaire Workflow
+
+1.  [Read in QS data and define parameters](#params)
+2.  [Derive item-level analysis values](#item-aval)
+3.  [Derive composite scores](#composite)
+4.  [Derive timing, baseline, and change from baseline](#timing)
+5.  [Add ADSL variables](#adsl-vars)
+
+## Read in QS Data and Define Parameters {#params}
+
+```{r load-data}
+qs   <- pharmaversesdtm::qs   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+
+# Select a subset of subjects and questionnaire items for illustration
+qs_sub <- qs |>
+  filter(
+    USUBJID %in% unique(adsl$USUBJID)[1:4],
+    QSCAT == "ALZHEIMER'S DISEASE ASSESSMENT SCALE"
+  )
+
+qs_sub |>
+  select(USUBJID, QSTESTCD, QSTEST, QSSTRESN, QSDTC, VISIT) |>
+  head(10)
+```
+
+## Derive Item-Level Analysis Values {#item-aval}
+
+Each QS item is mapped to `PARAMCD`, `PARAM`, and `AVAL`:
+
+```{r item-aval}
+adqs <- qs_sub |>
+  mutate(
+    PARAMCD = QSTESTCD,
+    PARAM   = QSTEST,
+    AVAL    = QSSTRESN,
+    AVALC   = QSSTRESC
+  ) |>
+  derive_vars_dt(
+    new_vars_prefix = "A",
+    dtc             = QSDTC
+  ) |>
+  mutate(
+    AVISIT  = VISIT,
+    AVISITN = VISITNUM
+  )
+
+adqs |>
+  select(USUBJID, PARAMCD, PARAM, AVAL, ADT, AVISIT) |>
+  head(8)
+```
+
+## Derive Composite Scores {#composite}
+
+A composite score (e.g. total score) can be derived by summing or
+averaging item-level values using `derive_summary_records()`:
+
+```{r composite}
+# Example: total ADAS-Cog score as the sum of individual items
+adqs_total <- adqs |>
+  derive_summary_records(
+    by_vars       = exprs(STUDYID, USUBJID, VISIT, VISITNUM, ADT),
+    filter_add    = str_detect(PARAMCD, "^ACITM"),  # ADAS-Cog items only
+    set_values_to = exprs(
+      AVAL    = sum(AVAL, na.rm = FALSE),   # NA if any item is missing
+      PARAMCD = "ACTOT",
+      PARAM   = "ADAS-Cog Total Score"
+    )
+  )
+
+adqs_total |>
+  filter(PARAMCD == "ACTOT") |>
+  select(USUBJID, PARAMCD, PARAM, AVAL, VISIT) |>
+  head(5)
+```
+
+::: callout-warning
+Using `na.rm = FALSE` in the aggregation ensures that the total score is
+`NA` if any item is missing, which is the recommended approach for most
+questionnaire totals. Consult your SAP for the specific rule.
+:::
+
+## Derive Baseline and Change from Baseline {#timing}
+
+```{r baseline}
+adqs_total <- adqs_total |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  ) |>
+  restrict_derivation(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(STUDYID, USUBJID, PARAMCD),
+      order   = exprs(ADT, AVISITN),
+      new_var = ABLFL,
+      mode    = "last"
+    ),
+    filter = !is.na(AVAL) & ADT <= TRTSDT
+  ) |>
+  derive_var_base(
+    by_vars    = exprs(STUDYID, USUBJID, PARAMCD),
+    source_var = AVAL,
+    new_var    = BASE
+  ) |>
+  derive_var_chg() |>
+  derive_var_pchg()
+
+adqs_total |>
+  filter(PARAMCD == "ACTOT") |>
+  select(USUBJID, VISIT, AVAL, ABLFL, BASE, CHG, PCHG) |>
+  head(8)
+```
+
+## Add ADSL Variables {#adsl-vars}
+
+```{r adsl-vars}
+adqs_total <- adqs_total |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRT01A, TRT01P, AGE, SEX),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+adqs_total |>
+  select(USUBJID, PARAMCD, AVAL, TRT01A, AGE, SEX) |>
+  filter(!is.na(AVAL)) |>
+  head(5)
+```
+
+## Example Script
+
+A QS template script is available in the `{admiral}` package:
+
+```r
+use_ad_template("ADQS")
+```
+
+## See Also
+
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)
+-   [Generic Derivations](generic.qmd)
+-   [Higher Order Functions](higher_order.qmd)

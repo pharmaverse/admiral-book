@@ -1,0 +1,181 @@
+# Higher Order Functions
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+Higher order functions are `{admiral}` functions that take other
+functions as input. They enhance the existing portfolio of derivation
+functions by allowing greater customisation of the latter's behaviour.
+A derivation function can be:
+
+-   `call_derivation()` — Called multiple times, while varying some of
+    the input arguments.
+-   `restrict_derivation()` — Executed on a subset of the input dataset.
+-   `slice_derivation()` — Executed differently on subsets of the input
+    dataset.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+library(tibble)
+```
+
+## `call_derivation()` — Call a Function Multiple Times
+
+`call_derivation()` is useful when the same derivation must be applied
+multiple times with slightly different arguments. For example, when
+deriving multiple BDS findings parameters that share the same base
+derivation logic:
+
+```{r call-derivation}
+vs   <- pharmaversesdtm::vs   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+
+advs <- vs |>
+  filter(
+    USUBJID %in% unique(adsl$USUBJID)[1:4],
+    VSTESTCD %in% c("SYSBP", "DIABP", "PULSE", "WEIGHT")
+  ) |>
+  mutate(
+    PARAMCD = VSTESTCD,
+    PARAM   = VSTEST,
+    AVAL    = VSSTRESN
+  ) |>
+  derive_vars_dt(new_vars_prefix = "A", dtc = VSDTC) |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+# Derive ABLFL and BASE for multiple parameters using call_derivation()
+advs <- call_derivation(
+  derivation = restrict_derivation,
+  args = params(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(STUDYID, USUBJID, PARAMCD),
+      order   = exprs(ADT),
+      new_var = ABLFL,
+      mode    = "last"
+    ),
+    filter = !is.na(AVAL) & ADT <= TRTSDT
+  )
+)(advs)
+
+advs <- advs |>
+  derive_var_base(
+    by_vars    = exprs(STUDYID, USUBJID, PARAMCD),
+    source_var = AVAL,
+    new_var    = BASE
+  )
+
+advs |>
+  select(USUBJID, PARAMCD, ADT, AVAL, ABLFL, BASE) |>
+  filter(!is.na(BASE)) |>
+  head(8)
+```
+
+## `restrict_derivation()` — Apply to a Subset
+
+`restrict_derivation()` allows a derivation to be executed only on a
+subset of records (defined by `filter`). Records not matching the filter
+are kept but unchanged.
+
+```{r restrict-derivation}
+# Flag the first occurrence of most severe AE, restricted to TEAEs only
+ae <- pharmaversesdtm::ae |> convert_blanks_to_na()
+
+adae <- ae |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:4]) |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT, TRTEDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  ) |>
+  derive_vars_dt(new_vars_prefix = "AST", dtc = AESTDTC) |>
+  mutate(ASEV = AESEV) |>
+  derive_var_trtemfl(
+    trt_start_date = TRTSDT,
+    trt_end_date   = TRTEDT,
+    end_window     = 30
+  )
+
+adae <- adae |>
+  restrict_derivation(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(STUDYID, USUBJID),
+      order   = exprs(
+        as.integer(factor(
+          ASEV,
+          levels = c("DEATH THREATENING", "SEVERE", "MODERATE", "MILD")
+        )),
+        ASTDT, AESEQ
+      ),
+      new_var = AOCCIFL,
+      mode    = "first"
+    ),
+    filter = TRTEMFL == "Y"
+  )
+
+adae |>
+  select(USUBJID, AESEQ, ASEV, ASTDT, TRTEMFL, AOCCIFL) |>
+  head(8)
+```
+
+## `slice_derivation()` — Apply Different Logic to Subsets
+
+`slice_derivation()` splits the input dataset into slices, applies a
+potentially different derivation to each slice, and combines the
+results. This is useful when different records need different imputation
+or derivation logic.
+
+```{r slice-derivation}
+# Use different time imputation for pre-dose vs other VS records
+vs_timed <- vs |>
+  filter(
+    USUBJID %in% unique(adsl$USUBJID)[1:2],
+    VSTESTCD == "SYSBP"
+  ) |>
+  slice_derivation(
+    derivation = derive_vars_dtm,
+    args = params(
+      dtc             = VSDTC,
+      new_vars_prefix = "A"
+    ),
+    derivation_slice(
+      filter = !is.na(VSTPT) & toupper(VSTPT) == "PRE-DOSE",
+      args   = params(time_imputation = "first")
+    ),
+    derivation_slice(
+      filter = TRUE,
+      args   = params(time_imputation = "last")
+    )
+  )
+
+vs_timed |>
+  select(USUBJID, VSTESTCD, VSDTC, VSTPT, ADTM) |>
+  head(6)
+```
+
+## Summary
+
+| Function | Use case |
+|---|---|
+| `call_derivation()` | Call the same function multiple times with varying arguments |
+| `restrict_derivation()` | Apply a derivation to a filtered subset of records |
+| `slice_derivation()` | Apply different derivations to different subsets of records |
+
+## See Also
+
+-   [Introduction to admiral](introduction.qmd)
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)
+-   [Date/Time Imputation](imputation.qmd)

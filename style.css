@@ -1,0 +1,42 @@
+/* admiral book custom styles */
+
+/* Code blocks */
+pre.sourceCode {
+  border-left: 4px solid #00857C;
+  padding-left: 1em;
+}
+
+/* Callout boxes */
+.callout {
+  border-radius: 4px;
+}
+
+/* Sidebar navigation */
+.sidebar-title {
+  font-weight: bold;
+  color: #00857C;
+}
+
+/* Links */
+a {
+  color: #00857C;
+}
+
+a:hover {
+  color: #005A55;
+}
+
+/* Headers */
+h1, h2, h3 {
+  color: #2C2C2C;
+}
+
+/* pharmaverse brand colour for dividers */
+hr {
+  border-color: #00857C;
+}
+
+/* Table styling */
+table.table {
+  font-size: 0.9em;
+}

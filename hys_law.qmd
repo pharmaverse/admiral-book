@@ -1,0 +1,164 @@
+# Hy's Law
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+Hy's Law is a clinical rule used to identify drug-induced liver injury
+(DILI). The criteria require:
+
+1.  ALT or AST ≥ 3× Upper Limit of Normal (ULN), **and**
+2.  Total bilirubin ≥ 2× ULN, **and**
+3.  No other explanation (e.g. hepatitis, biliary obstruction) for the
+    laboratory abnormalities.
+
+In ADaM terms, Hy's Law criteria are derived by flagging subjects and/or
+records in the laboratory dataset (typically `ADLB`).
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+library(lubridate)
+```
+
+## Programming Workflow
+
+The derivation involves three main steps:
+
+1.  Identify records where ALT or AST ≥ 3× ULN.
+2.  Identify records where Total Bilirubin ≥ 2× ULN.
+3.  Identify subjects satisfying both criteria simultaneously (or within
+    a study-defined time window).
+
+### Step 1: Prepare the Lab Dataset
+
+```{r prepare-adlb}
+lb   <- pharmaversesdtm::lb   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+
+adlb <- lb |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:6]) |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  ) |>
+  mutate(
+    PARAMCD = LBTESTCD,
+    PARAM   = LBTEST,
+    AVAL    = LBSTRESN,
+    AVALU   = LBSTRESU,
+    ANRHI   = LBSTNRHI
+  ) |>
+  derive_vars_dt(
+    new_vars_prefix = "A",
+    dtc             = LBDTC
+  ) |>
+  filter(PARAMCD %in% c("ALT", "AST", "BILI"))
+
+adlb |>
+  select(USUBJID, PARAMCD, AVAL, ANRHI, ADT) |>
+  head(10)
+```
+
+### Step 2: Derive Hy's Law Numerator Flag
+
+Identify records where ALT or AST ≥ 3× ULN:
+
+```{r hyslaw-alt-ast}
+adlb <- adlb |>
+  mutate(
+    # Ratio to ULN
+    AVALN_ULN = if_else(!is.na(ANRHI) & ANRHI > 0, AVAL / ANRHI, NA_real_),
+    # Hy's Law component 1 flag
+    HYS_NUM = if_else(
+      PARAMCD %in% c("ALT", "AST") & !is.na(AVALN_ULN) & AVALN_ULN >= 3,
+      "Y",
+      NA_character_
+    )
+  )
+
+adlb |>
+  filter(!is.na(HYS_NUM)) |>
+  select(USUBJID, PARAMCD, AVAL, ANRHI, AVALN_ULN, HYS_NUM) |>
+  head(5)
+```
+
+### Step 3: Derive Hy's Law Denominator Flag
+
+Identify records where Total Bilirubin ≥ 2× ULN:
+
+```{r hyslaw-bili}
+adlb <- adlb |>
+  mutate(
+    HYS_DEN = if_else(
+      PARAMCD == "BILI" & !is.na(AVALN_ULN) & AVALN_ULN >= 2,
+      "Y",
+      NA_character_
+    )
+  )
+
+adlb |>
+  filter(!is.na(HYS_DEN)) |>
+  select(USUBJID, PARAMCD, AVAL, ANRHI, AVALN_ULN, HYS_DEN) |>
+  head(5)
+```
+
+### Step 4: Derive Subject-Level Hy's Law Flag
+
+A subject satisfies Hy's Law if they have both a numerator and a
+denominator flag. Use `derive_var_merged_exist_flag()` to create a
+subject-level flag:
+
+```{r hyslaw-subj}
+# Subjects with ALT/AST >= 3xULN
+subj_hys_num <- adlb |>
+  filter(!is.na(HYS_NUM)) |>
+  distinct(STUDYID, USUBJID)
+
+# Subjects with BILI >= 2xULN
+subj_hys_den <- adlb |>
+  filter(!is.na(HYS_DEN)) |>
+  distinct(STUDYID, USUBJID)
+
+# Subjects satisfying both criteria (Hy's Law potential cases)
+hys_subjects <- inner_join(subj_hys_num, subj_hys_den, by = c("STUDYID", "USUBJID")) |>
+  mutate(HYSC_FL = "Y")
+
+hys_subjects
+```
+
+## Notes on Study-Specific Implementation
+
+In practice, the Hy's Law derivation must be tailored to the study:
+
+-   The time window between the ALT/AST ≥ 3× ULN and the
+    bilirubin ≥ 2× ULN events may be restricted (e.g. within the
+    same study phase or within X days).
+-   Baseline records should typically be excluded.
+-   Results should be added to `ADLB` and/or `ADSL` as flags.
+
+::: callout-tip
+The `derive_vars_joined()` function is useful for linking ALT/AST flags
+to bilirubin records that fall within a specified time window.
+:::
+
+## Example Script
+
+An ADLB template that includes Hy's Law derivations is available:
+
+```r
+use_ad_template("ADLB")
+```
+
+## See Also
+
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)
+-   [Lab Grading](lab_grading.qmd)
+-   [Date/Time Imputation](imputation.qmd)

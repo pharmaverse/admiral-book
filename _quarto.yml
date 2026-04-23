@@ -1,0 +1,69 @@
+project:
+  type: book
+  output-dir: _book
+
+engine: knitr
+
+book:
+  title: "The admiral Book"
+  subtitle: "A Guide to ADaM Dataset Creation with admiral"
+  reader-mode: true
+
+  page-footer:
+    left: |
+      The admiral Book was written by the Pharmaverse admiral team.
+    right: |
+      This book was built with <a href="https://quarto.org/">Quarto</a>.
+  cover-image: images/admiral_hex.png
+  favicon: images/admiral_hex.png
+  site-url: https://pharmaverse.github.io/admiral-book/
+  repo-url: https://github.com/pharmaverse/admiral-book/
+  repo-branch: main
+  repo-actions: [edit, issue]
+  chapters:
+    - index.qmd
+
+    - part: start.qmd
+      chapters:
+        - introduction.qmd
+        - concepts_conventions.qmd
+
+    - part: adam_structures.qmd
+      chapters:
+        - adsl.qmd
+        - occds.qmd
+        - bds_finding.qmd
+        - bds_exposure.qmd
+        - bds_tte.qmd
+
+    - part: special_topics.qmd
+      chapters:
+        - imputation.qmd
+        - visits_periods.qmd
+        - hys_law.qmd
+        - lab_grading.qmd
+        - estimands.qmd
+        - higher_order.qmd
+        - generic.qmd
+        - questionnaires.qmd
+        - queries_dataset.qmd
+
+    - part: advanced.qmd
+      chapters:
+        - pk_adnca.qmd
+        - adab.qmd
+        - faq.qmd
+
+bibliography: references.bib
+
+format:
+  html:
+    theme:
+      - cosmo
+      - style.css
+    code-link: true
+    author-meta: "Pharmaverse admiral team"
+    callout-appearance: simple
+    toc: true
+
+editor: visual

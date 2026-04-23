@@ -1,0 +1,175 @@
+# Generic Derivations
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+`{admiral}` provides a set of general-purpose derivation functions that
+can be applied across many different ADaM datasets and derivation
+scenarios. This chapter covers the most commonly used generic functions.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(tibble)
+library(lubridate)
+library(pharmaversesdtm)
+```
+
+## `derive_vars_merged()` — Merge Variables from Another Dataset
+
+`derive_vars_merged()` adds variable(s) to the input dataset from a
+look-up or reference dataset based on a by-variable key.
+
+```{r derive-vars-merged}
+adsl <- admiral::admiral_adsl
+ae   <- pharmaversesdtm::ae |> convert_blanks_to_na()
+
+adae <- ae |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:4]) |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT, TRTEDT, TRT01A, TRT01P),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+adae |>
+  select(USUBJID, AETERM, TRTSDT, TRTEDT, TRT01A) |>
+  head(5)
+```
+
+## `derive_vars_joined()` — Merge Based on a Condition
+
+`derive_vars_joined()` is similar to `derive_vars_merged()` but also
+allows filtering based on conditions that reference both datasets. It is
+used when the records to merge depend on date or value comparisons.
+
+```{r derive-vars-joined}
+# Derive the last dose date before the start of each AE
+ex    <- pharmaversesdtm::ex |> convert_blanks_to_na()
+ex_dt <- ex |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:4]) |>
+  derive_vars_dtm(dtc = EXSTDTC, new_vars_prefix = "EXST", flag_imputation = "none")
+
+adae <- adae |>
+  derive_vars_dt(new_vars_prefix = "AST", dtc = AESTDTC, highest_imputation = "M") |>
+  derive_vars_joined(
+    ex_dt,
+    by_vars     = exprs(STUDYID, USUBJID),
+    new_vars    = exprs(LDOSEDTM = EXSTDTM),
+    join_vars   = exprs(EXSTDTM),
+    join_type   = "all",
+    order       = exprs(EXSTDTM),
+    filter_add  = (EXDOSE > 0 | (EXDOSE == 0 & grepl("PLACEBO", EXTRT))) & !is.na(EXSTDTM),
+    filter_join = EXSTDTM <= ASTDTM,
+    mode        = "last"
+  )
+
+adae |>
+  select(USUBJID, AETERM, AESTDTC, ASTDTM, LDOSEDTM) |>
+  head(5)
+```
+
+## `derive_summary_records()` — Add Summary Records
+
+`derive_summary_records()` adds new records to the dataset based on
+aggregations across by-group records. It is commonly used to derive
+summary parameters (e.g. average, maximum) in BDS datasets.
+
+```{r derive-summary-records}
+vs <- pharmaversesdtm::vs |> convert_blanks_to_na()
+
+advs <- vs |>
+  filter(
+    USUBJID %in% unique(adsl$USUBJID)[1:4],
+    VSTESTCD %in% c("SYSBP", "DIABP")
+  ) |>
+  mutate(PARAMCD = VSTESTCD, AVAL = VSSTRESN) |>
+  derive_vars_dt(new_vars_prefix = "A", dtc = VSDTC)
+
+# Add a mean AVAL summary record per subject and visit
+advs_with_mean <- advs |>
+  derive_summary_records(
+    by_vars       = exprs(STUDYID, USUBJID, VISIT, VISITNUM),
+    filter_add    = PARAMCD %in% c("SYSBP", "DIABP"),
+    set_values_to = exprs(
+      AVAL    = mean(AVAL, na.rm = TRUE),
+      PARAMCD = "MABP",
+      PARAM   = "Mean Arterial Blood Pressure"
+    )
+  )
+
+advs_with_mean |>
+  filter(PARAMCD == "MABP") |>
+  select(USUBJID, VISIT, PARAMCD, PARAM, AVAL) |>
+  head(5)
+```
+
+## `derive_var_obs_number()` — Observation Number
+
+`derive_var_obs_number()` assigns a sequential observation number
+(`ASEQ` or similar) within a by group:
+
+```{r aseq}
+advs |>
+  derive_var_obs_number(
+    by_vars    = exprs(STUDYID, USUBJID),
+    order      = exprs(PARAMCD, ADT, VISITNUM),
+    new_var    = ASEQ,
+    check_type = "error"
+  ) |>
+  select(USUBJID, PARAMCD, ADT, VISITNUM, ASEQ) |>
+  head(8)
+```
+
+## `derive_var_extreme_flag()` — Extreme Record Flag
+
+`derive_var_extreme_flag()` flags the first or last record within a
+by-group according to a sort order. Useful for flagging the last record
+before treatment start (baseline) or the first occurrence of an event.
+
+```{r extreme-flag}
+advs |>
+  filter(!is.na(AVAL)) |>
+  derive_var_extreme_flag(
+    by_vars = exprs(STUDYID, USUBJID, PARAMCD),
+    order   = exprs(ADT, VISITNUM),
+    new_var = LASTFL,
+    mode    = "last"
+  ) |>
+  select(USUBJID, PARAMCD, ADT, AVAL, LASTFL) |>
+  head(8)
+```
+
+## Sort Order {#sort_order}
+
+When `NA` values appear in sorting variables used by `{admiral}`
+functions (e.g. the `order` argument of `derive_var_extreme_flag()`),
+they are treated as the **smallest** value by default. Use `desc()` to
+sort in descending order; `NA` values will then be treated as the
+**largest**.
+
+```{r sort-order-na}
+# Illustrate NA sort order
+advs |>
+  filter(PARAMCD == "SYSBP") |>
+  derive_var_extreme_flag(
+    by_vars = exprs(USUBJID),
+    order   = exprs(ADT),   # NAs go first
+    new_var = FIRSTFL,
+    mode    = "first"
+  ) |>
+  select(USUBJID, ADT, AVAL, FIRSTFL) |>
+  head(6)
+```
+
+## See Also
+
+-   [Introduction to admiral](introduction.qmd)
+-   [Higher Order Functions](higher_order.qmd)
+-   [Date/Time Imputation](imputation.qmd)
