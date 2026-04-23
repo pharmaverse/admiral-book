@@ -4,6 +4,10 @@ project:
 
 engine: knitr
 
+knitr:
+  opts_chunk:
+    eval: false
+
 book:
   title: "The admiral Book"
   subtitle: "A Guide to ADaM Dataset Creation with admiral"
