@@ -1,0 +1,192 @@
+# PK Non-Compartmental Analysis (ADNCA)
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+This chapter describes creating a PK Non-Compartmental Analysis ADaM
+dataset (`ADNCA`). NCA analyses require concentration-time data from
+the PC (Pharmacokinetic Concentrations) SDTM domain and dosing
+information from the EX domain.
+
+::: callout-note
+NCA analyses are often performed using specialist PK software (e.g.
+Phoenix WinNonlin, R `{PKNCA}`). This chapter focuses on the ADaM
+programming steps needed to prepare the input dataset.
+:::
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+library(lubridate)
+```
+
+## Programming Workflow
+
+1.  [Read in Data](#readdata)
+2.  [Derive Nominal and Actual Time Variables](#time)
+3.  [Derive Dose Variables](#dose)
+4.  [Assign `PARAMCD`, `PARAM`, `AVAL`](#paramcd)
+5.  [Derive Relative Time Variables (`NFRLT`, `AFRLT`, `NRRLT`, `ARRLT`)](#rlt)
+6.  [Add ADSL Variables](#adsl_vars)
+7.  [Derive Analysis Sequence Number](#aseq)
+
+## Read in Data {#readdata}
+
+```{r load-data}
+pc   <- pharmaversesdtm::pc   |> convert_blanks_to_na()
+ex   <- pharmaversesdtm::ex   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+
+# Filter to subjects with PK data
+pk_subjects <- unique(pc$USUBJID)
+
+pc   <- pc   |> filter(USUBJID %in% pk_subjects)
+ex   <- ex   |> filter(USUBJID %in% pk_subjects)
+adsl <- adsl |> filter(USUBJID %in% pk_subjects)
+```
+
+## Derive Nominal and Actual Time Variables {#time}
+
+Actual sample collection datetime (`ADTM`) is derived from `PCDTC`. The
+nominal time (`NFRLT`) comes from `PCTPTNUM` in the PC domain:
+
+```{r time-vars}
+adpc <- pc |>
+  derive_vars_dtm(
+    dtc             = PCDTC,
+    new_vars_prefix = "A",
+    flag_imputation = "none"
+  ) |>
+  mutate(
+    NFRLT = PCTPTNUM,  # Nominal time from first dose (hours)
+    ATPT  = PCTPT,
+    ATPTN = PCTPTNUM
+  )
+
+adpc |>
+  select(USUBJID, PCTRT, PCDTC, ADTM, NFRLT, ATPT) |>
+  head(8)
+```
+
+## Derive Dose Variables {#dose}
+
+Dosing records from the EX domain provide the reference dose event for
+each concentration record:
+
+```{r dose-vars}
+ex_dtm <- ex |>
+  derive_vars_dtm(
+    dtc             = EXSTDTC,
+    new_vars_prefix = "EXST",
+    flag_imputation = "none"
+  )
+
+# Merge the most recent dose before the concentration time
+adpc <- adpc |>
+  derive_vars_joined(
+    ex_dtm,
+    by_vars     = exprs(STUDYID, USUBJID),
+    new_vars    = exprs(EXSTDTM, EXDOSE, EXDOSU, EXTRT),
+    join_vars   = exprs(EXSTDTM),
+    join_type   = "all",
+    filter_add  = EXDOSE > 0 & !is.na(EXSTDTM),
+    filter_join = EXSTDTM <= ADTM,
+    order       = exprs(EXSTDTM),
+    mode        = "last"
+  )
+
+adpc |>
+  select(USUBJID, PCTRT, ADTM, EXSTDTM, EXDOSE, EXTRT) |>
+  head(8)
+```
+
+## Assign `PARAMCD`, `PARAM`, `AVAL` {#paramcd}
+
+```{r paramcd}
+adpc <- adpc |>
+  mutate(
+    PARAMCD = PCTESTCD,
+    PARAM   = PCTEST,
+    AVAL    = PCSTRESN,
+    AVALU   = PCSTRESU,
+    DTYPE   = NA_character_  # will be set for derived records
+  )
+
+adpc |>
+  select(USUBJID, PARAMCD, PARAM, AVAL, AVALU) |>
+  head(5)
+```
+
+## Derive Relative Time Variables {#rlt}
+
+The key timing variables for NCA are:
+
+-   `NFRLT` — Nominal time from first dose (hours)
+-   `AFRLT` — Actual time from first dose (hours)
+-   `NRRLT` — Nominal time from most recent dose (hours)
+-   `ARRLT` — Actual time from most recent dose (hours)
+
+```{r rlt}
+adpc <- adpc |>
+  mutate(
+    AFRLT = as.numeric(difftime(ADTM, EXSTDTM, units = "hours")),
+    NRRLT = NFRLT,   # In single-period studies, NRRLT = NFRLT
+    ARRLT = AFRLT    # In single-period studies, ARRLT = AFRLT
+  )
+
+adpc |>
+  select(USUBJID, ADTM, EXSTDTM, NFRLT, AFRLT, NRRLT, ARRLT) |>
+  head(8)
+```
+
+## Add ADSL Variables {#adsl_vars}
+
+```{r adsl-vars}
+adpc <- adpc |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRT01A, TRT01P, TRTSDT, AGE, SEX, RACE, WEIGHTBL),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+adpc |>
+  select(USUBJID, PARAMCD, AVAL, TRT01A, AGE, SEX) |>
+  head(5)
+```
+
+## Derive Analysis Sequence Number {#aseq}
+
+```{r aseq}
+adpc <- adpc |>
+  derive_var_obs_number(
+    by_vars    = exprs(STUDYID, USUBJID),
+    order      = exprs(PARAMCD, ADTM, NFRLT),
+    new_var    = ASEQ,
+    check_type = "error"
+  )
+
+adpc |>
+  select(USUBJID, PARAMCD, ADTM, NFRLT, ASEQ) |>
+  head(5)
+```
+
+## Example Script
+
+An ADNCA template script is available in the `{admiral}` package:
+
+```r
+use_ad_template("ADNCA")
+```
+
+## See Also
+
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)
+-   [Date/Time Imputation](imputation.qmd)
+-   [Visit and Period Variables](visits_periods.qmd)

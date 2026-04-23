@@ -1,0 +1,291 @@
+# Creating a BDS Findings ADaM
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+This chapter describes creating a BDS (Basic Data Structure) Findings ADaM.
+Examples are currently presented and tested using the `VS` (Vital Signs) SDTM
+domain to create `ADVS`. However, the workflow applies to all BDS Findings
+ADaMs such as `ADLB`, `ADEG`, etc.
+
+::: callout-note
+All examples assume CDISC SDTM and/or ADaM format as input unless otherwise
+specified.
+:::
+
+## Programming Workflow
+
+1.  [Read in Data](#readdata)
+2.  [Assign `PARAMCD`, `PARAM`, `PARAMN`, `PARCAT1`](#paramcd)
+3.  [Derive Analysis Value (`AVAL`, `AVALC`)](#aval)
+4.  [Derive Additional Parameters](#params)
+5.  [Derive Timing Variables (`ADT`, `ADY`, `AVISIT`, etc.)](#timing)
+6.  [Derive Baseline (`ABLFL`, `BASE`, `BASEC`)](#baseline)
+7.  [Derive Change from Baseline (`CHG`, `PCHG`)](#chg)
+8.  [Derive Reference Range Indicators (`ANRLO`, `ANRHI`, etc.)](#anr)
+9.  [Derive Normal Range Flags (`ANL01FL`, etc.)](#anrfl)
+10. [Derive Analysis Flags (e.g. `ANL01FL`)](#anlfl)
+11. [Derive Treatment and Period Variables](#trt)
+12. [Add ADSL Variables](#adsl_vars)
+13. [Derive Analysis Sequence Number (`ASEQ`)](#aseq)
+14. [Add Labels and Attributes](#attributes)
+
+## Read in Data {#readdata}
+
+For example purposes, the CDISC Pilot SDTM datasets — which are included in
+`{pharmaversesdtm}` — are used.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+library(lubridate)
+```
+
+```{r load-data}
+vs   <- pharmaversesdtm::vs   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+```
+
+```{r filter-data}
+vs <- vs |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:6])
+```
+
+## Assign `PARAMCD`, `PARAM`, `PARAMN`, `PARCAT1` {#paramcd}
+
+The function `derive_vars_merged()` can be used to assign parameter-level
+variables from a look-up table. Here we use a simple inline look-up table for
+the vital signs parameters.
+
+```{r paramcd}
+param_lookup <- tribble(
+  ~VSTESTCD, ~PARAMCD,    ~PARAM,                             ~PARAMN, ~PARCAT1,
+  "SYSBP",   "SYSBP",     "Systolic Blood Pressure (mmHg)",   1,       "VITAL SIGNS",
+  "DIABP",   "DIABP",     "Diastolic Blood Pressure (mmHg)",  2,       "VITAL SIGNS",
+  "PULSE",   "PULSE",     "Pulse Rate (beats/min)",            3,       "VITAL SIGNS",
+  "WEIGHT",  "WEIGHT",    "Weight (kg)",                       4,       "VITAL SIGNS",
+  "HEIGHT",  "HEIGHT",    "Height (cm)",                       5,       "VITAL SIGNS",
+  "TEMP",    "TEMP",      "Temperature (°C)",                  6,       "VITAL SIGNS",
+  "RESP",    "RESP",      "Respiratory Rate (breaths/min)",    7,       "VITAL SIGNS"
+)
+
+advs <- vs |>
+  derive_vars_merged(
+    dataset_add = param_lookup,
+    by_vars     = exprs(VSTESTCD)
+  )
+
+advs |>
+  select(USUBJID, VSTESTCD, PARAMCD, PARAM, PARAMN, PARCAT1) |>
+  head(5)
+```
+
+## Derive Analysis Value {#aval}
+
+For findings ADaMs, `AVAL` usually comes directly from the numeric standard
+result (`VSSTRESN`), and `AVALC` from the character standard result
+(`VSSTRESC`).
+
+```{r aval}
+advs <- advs |>
+  mutate(
+    AVAL  = VSSTRESN,
+    AVALC = VSSTRESC
+  )
+```
+
+## Derive Additional Parameters {#params}
+
+Additional parameters can be derived using `derive_param_computed()`. For
+example, Pulse Pressure (`PULPR`) can be derived from Systolic and Diastolic
+Blood Pressure:
+
+```{r additional-params}
+advs <- advs |>
+  derive_param_computed(
+    by_vars       = exprs(USUBJID, VISIT, VISITNUM, VSTPT),
+    parameters    = c("SYSBP", "DIABP"),
+    set_values_to = exprs(
+      AVAL    = AVAL.SYSBP - AVAL.DIABP,
+      PARAMCD = "PULPR",
+      PARAM   = "Pulse Pressure (mmHg)",
+      PARAMN  = 8L,
+      PARCAT1 = "VITAL SIGNS"
+    )
+  )
+
+advs |>
+  filter(PARAMCD == "PULPR") |>
+  select(USUBJID, VISIT, PARAMCD, PARAM, AVAL) |>
+  head(5)
+```
+
+## Derive Timing Variables {#timing}
+
+Timing variables include `ADT`, `ADY`, `AVISIT`, `AVISITN`, and `ATPT`.
+
+```{r timing}
+advs <- advs |>
+  derive_vars_dt(
+    new_vars_prefix = "A",
+    dtc             = VSDTC
+  ) |>
+  derive_vars_dy(
+    reference_date = TRTSDT,
+    source_vars    = exprs(ADT)
+  ) |>
+  mutate(
+    AVISIT  = if_else(str_detect(VISIT, "SCREEN"), "Baseline", VISIT),
+    AVISITN = VISITNUM,
+    ATPT    = VSTPT,
+    ATPTN   = VSTPTNUM
+  )
+```
+
+::: callout-tip
+Use the `{admiral}` function `derive_vars_merged()` with a visits look-up
+table if your `AVISIT` assignment is complex. See [Visit and Period
+Variables](visits_periods.qmd) for details.
+:::
+
+```{r show-timing}
+advs |>
+  select(USUBJID, ADT, ADY, AVISIT, AVISITN, ATPT) |>
+  head(5)
+```
+
+## Derive Baseline {#baseline}
+
+The baseline flag `ABLFL` marks the last non-missing record before (or on)
+the treatment start date:
+
+```{r ablfl}
+advs <- advs |>
+  restrict_derivation(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(STUDYID, USUBJID, PARAMCD),
+      order   = exprs(ADT, VISITNUM),
+      new_var = ABLFL,
+      mode    = "last"
+    ),
+    filter = !is.na(AVAL) & ADT <= TRTSDT
+  )
+```
+
+Baseline value (`BASE`) and baseline character value (`BASEC`) can then be
+derived:
+
+```{r base}
+advs <- advs |>
+  derive_var_base(
+    by_vars    = exprs(STUDYID, USUBJID, PARAMCD),
+    source_var = AVAL,
+    new_var    = BASE
+  ) |>
+  derive_var_base(
+    by_vars    = exprs(STUDYID, USUBJID, PARAMCD),
+    source_var = AVALC,
+    new_var    = BASEC
+  )
+
+advs |>
+  select(USUBJID, PARAMCD, ADT, AVAL, ABLFL, BASE) |>
+  head(8)
+```
+
+## Derive Change from Baseline {#chg}
+
+```{r chg}
+advs <- advs |>
+  derive_var_chg() |>
+  derive_var_pchg()
+
+advs |>
+  select(USUBJID, PARAMCD, ADT, AVAL, BASE, CHG, PCHG) |>
+  head(8)
+```
+
+## Derive Reference Range Indicators {#anr}
+
+The reference range variables (`ANRLO`, `ANRHI`) can be derived from SDTM:
+
+```{r anr}
+advs <- advs |>
+  mutate(
+    ANRLO = VSSTNRLO,
+    ANRHI = VSSTNRHI
+  )
+```
+
+## Derive Normal Range Flags {#anrfl}
+
+The `derive_var_anrind()` function derives the analysis range indicator
+(`ANRIND`):
+
+```{r anrind}
+advs <- advs |>
+  derive_var_anrind()
+
+advs |>
+  select(USUBJID, PARAMCD, AVAL, ANRLO, ANRHI, ANRIND) |>
+  head(8)
+```
+
+## Add ADSL Variables {#adsl_vars}
+
+If needed, the remaining `ADSL` variables can now be added:
+
+```{r adsl-vars}
+advs <- advs |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTP = TRT01P, TRTA = TRT01A),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+```
+
+## Derive Analysis Sequence Number {#aseq}
+
+```{r aseq}
+advs <- advs |>
+  derive_var_obs_number(
+    by_vars    = exprs(STUDYID, USUBJID),
+    order      = exprs(PARAMCD, ADT, VISITNUM, ATPTN),
+    new_var    = ASEQ,
+    check_type = "error"
+  )
+
+advs |>
+  select(USUBJID, PARAMCD, ADT, VISITNUM, ASEQ) |>
+  head(5)
+```
+
+## Add Labels and Attributes {#attributes}
+
+See the equivalent section in [Creating ADSL](adsl.qmd#attributes) for a
+discussion of packages like `{metacore}`, `{metatools}`, and `{xportr}` for
+applying metadata.
+
+## Example Script
+
+A template script for ADVS is available in the `{admiral}` package:
+
+```r
+use_ad_template("ADVS")
+```
+
+## See Also
+
+-   [Creating ADSL](adsl.qmd)
+-   [Date/Time Imputation](imputation.qmd)
+-   [Visit and Period Variables](visits_periods.qmd)
+-   [Hy's Law](hys_law.qmd)
+-   [Lab Grading](lab_grading.qmd)

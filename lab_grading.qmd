@@ -1,0 +1,193 @@
+# Lab Grading
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+Lab grading assigns a numeric or character severity grade to laboratory
+results based on reference ranges or pre-defined criteria. Common
+grading schemes include:
+
+-   **CTCAE** — Common Terminology Criteria for Adverse Events
+    (FDA/NCI-defined; most widely used in oncology).
+-   **Division of AIDS (DAIDS)** grading criteria.
+-   **WHO** grading criteria.
+
+The `{admiral}` package provides the `derive_var_atoxgr_dir()` and
+`derive_var_atoxgr()` functions to apply grading criteria, along with
+built-in lookup tables for CTCAE.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+```
+
+## Programming Workflow
+
+1.  [Prepare the Lab Dataset](#prepare)
+2.  [Apply Grading Criteria (Low and High)](#grading)
+3.  [Derive the Overall Toxicity Grade](#overall)
+4.  [Baseline Grade](#baseline)
+5.  [Maximum Grade](#max)
+
+## Prepare the Lab Dataset {#prepare}
+
+```{r prepare}
+lb   <- pharmaversesdtm::lb   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+
+adlb <- lb |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:6]) |>
+  mutate(
+    PARAMCD = LBTESTCD,
+    PARAM   = LBTEST,
+    AVAL    = LBSTRESN,
+    AVALU   = LBSTRESU,
+    ANRLO   = LBSTNRLO,
+    ANRHI   = LBSTNRHI,
+    A1LO    = LBSTNRLO,  # lower reference range (used for grading)
+    A1HI    = LBSTNRHI   # upper reference range (used for grading)
+  )
+
+adlb |>
+  select(USUBJID, PARAMCD, AVAL, AVALU, ANRLO, ANRHI) |>
+  head(8)
+```
+
+## Apply Grading Criteria {#grading}
+
+The `derive_var_atoxgr_dir()` function derives the toxicity grade for a
+given direction (low or high). It uses a look-up table of grading
+criteria.
+
+The `{admiral}` package provides `atoxgr_criteria_ctcv5` (CTCAE v5),
+`atoxgr_criteria_ctcv4` (CTCAE v4), and `atoxgr_criteria_daids` (DAIDS).
+
+```{r grading}
+# Derive toxicity grade for values below the normal range (low)
+adlb <- adlb |>
+  derive_var_atoxgr_dir(
+    new_var      = ATOXGRL,
+    tox_grade_crit_var = PARAMCD,
+    aval_var     = AVAL,
+    atoxgr_criteria = atoxgr_criteria_ctcv5,
+    direction    = "L"
+  )
+
+# Derive toxicity grade for values above the normal range (high)
+adlb <- adlb |>
+  derive_var_atoxgr_dir(
+    new_var      = ATOXGRH,
+    tox_grade_crit_var = PARAMCD,
+    aval_var     = AVAL,
+    atoxgr_criteria = atoxgr_criteria_ctcv5,
+    direction    = "H"
+  )
+
+adlb |>
+  select(USUBJID, PARAMCD, AVAL, ANRLO, ANRHI, ATOXGRL, ATOXGRH) |>
+  filter(!is.na(ATOXGRL) | !is.na(ATOXGRH)) |>
+  head(8)
+```
+
+## Derive the Overall Toxicity Grade {#overall}
+
+The `derive_var_atoxgr()` function combines the low and high grades
+into a single overall grade. By convention:
+
+-   Positive integers (1–4) represent high (above normal) grades.
+-   Negative integers (−1 to −4) represent low (below normal) grades.
+
+```{r overall}
+adlb <- adlb |>
+  derive_var_atoxgr()
+
+adlb |>
+  select(USUBJID, PARAMCD, AVAL, ANRLO, ANRHI, ATOXGRL, ATOXGRH, ATOXGR) |>
+  filter(!is.na(ATOXGRL) | !is.na(ATOXGRH)) |>
+  head(8)
+```
+
+## Baseline Grade {#baseline}
+
+Baseline grade (`BTOXGR`) is derived by flagging the baseline record
+first (`ABLFL`) and then deriving the baseline value:
+
+```{r baseline}
+adlb <- adlb |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  ) |>
+  derive_vars_dt(new_vars_prefix = "A", dtc = LBDTC) |>
+  restrict_derivation(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(STUDYID, USUBJID, PARAMCD),
+      order   = exprs(ADT),
+      new_var = ABLFL,
+      mode    = "last"
+    ),
+    filter = !is.na(AVAL) & ADT <= TRTSDT
+  ) |>
+  derive_var_base(
+    by_vars    = exprs(STUDYID, USUBJID, PARAMCD),
+    source_var = ATOXGR,
+    new_var    = BTOXGR
+  )
+
+adlb |>
+  select(USUBJID, PARAMCD, ADT, AVAL, ABLFL, ATOXGR, BTOXGR) |>
+  filter(!is.na(ATOXGR)) |>
+  head(8)
+```
+
+## Maximum Grade {#max}
+
+To derive the maximum toxicity grade for each subject and parameter,
+use `derive_summary_records()` or `derive_var_extreme_flag()`:
+
+```{r max-grade}
+adlb_max <- adlb |>
+  filter(!is.na(ATOXGR)) |>
+  group_by(STUDYID, USUBJID, PARAMCD) |>
+  summarise(ATOXGRMX = max(ATOXGR, na.rm = TRUE), .groups = "drop")
+
+adlb_max |>
+  filter(ATOXGRMX > 0) |>
+  head(8)
+```
+
+## Grading Criteria Datasets
+
+The following look-up datasets are provided by `{admiral}`:
+
+| Dataset | Description |
+|---|---|
+| `atoxgr_criteria_ctcv5` | NCI CTCAE v5.0 criteria |
+| `atoxgr_criteria_ctcv4` | NCI CTCAE v4.0 criteria |
+| `atoxgr_criteria_daids` | DAIDS grading table (Nov 2014) |
+
+Each dataset contains the grading criteria by parameter code (`PARAMCD`),
+direction, and grade threshold. See `?atoxgr_criteria_ctcv5` for the
+complete column specification.
+
+## Example Script
+
+An ADLB template that includes toxicity grading is available:
+
+```r
+use_ad_template("ADLB")
+```
+
+## See Also
+
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)
+-   [Hy's Law](hys_law.qmd)

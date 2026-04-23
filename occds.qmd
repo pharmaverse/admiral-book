@@ -1,0 +1,359 @@
+# Creating an OCCDS ADaM
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+This chapter describes creating an OCCDS (Occurrence Data Structure) ADaM.
+Examples are presented and tested in the context of `ADAE`. However, the
+examples could be applied to other OCCDS ADaMs such as `ADCM`, `ADMH`,
+`ADDV`, etc.
+
+::: callout-note
+All examples assume CDISC SDTM and/or ADaM format as input unless otherwise
+specified.
+:::
+
+## Programming Workflow
+
+1.  [Read in Data](#readdata)
+2.  [Derive/Impute End and Start Analysis Date/time and Relative Day](#datetime)
+3.  [Derive Durations](#duration)
+4.  [Derive Planned and Actual Treatment](#trtpa)
+5.  [Derive Date/Date-time of Last Dose](#last_dose)
+6.  [Derive Treatment Dose and Unit](#dose_unit)
+7.  [Derive Severity, Causality, and Toxicity Grade](#severity)
+8.  [Derive Treatment Emergent Flag](#trtflag)
+9.  [Derive Occurrence Flags](#occflag)
+10. [Derive Query Variables](#query)
+11. [Add ADSL Variables](#adsl_vars)
+12. [Derive Analysis Sequence Number](#aseq)
+13. [Add Labels and Attributes](#attributes)
+
+## Read in Data {#readdata}
+
+To start, all data frames needed for the creation of `ADAE` should be read into
+the environment. This will be a company-specific process. Some of the data
+frames needed may be `AE` and `ADSL`.
+
+For example purposes, the CDISC Pilot SDTM and ADaM datasets — which are
+included in `{pharmaversesdtm}` — are used.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+library(lubridate)
+library(tibble)
+```
+
+```{r load-data}
+ae   <- pharmaversesdtm::ae |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+ex_single <- admiral::ex_single
+```
+
+```{r filter-data, echo=FALSE}
+ae <- filter(ae, USUBJID %in% c(
+  "01-701-1015", "01-701-1023", "01-703-1086",
+  "01-703-1096", "01-707-1037", "01-716-1024"
+))
+```
+
+At this step it may be useful to join `ADSL` to your `AE` domain as well. Only
+the `ADSL` variables used for derivations are selected at this step. The rest
+of the relevant `ADSL` variables are added later.
+
+```{r adae-base}
+adsl_vars <- exprs(TRTSDT, TRTEDT, TRT01A, TRT01P, DTHDT, EOSDT)
+
+adae <- derive_vars_merged(
+  ae,
+  dataset_add = adsl,
+  new_vars    = adsl_vars,
+  by          = exprs(STUDYID, USUBJID)
+)
+
+adae |>
+  select(USUBJID, AESEQ, AETERM, AESTDTC, TRTSDT, TRTEDT, TRT01A, TRT01P, DTHDT, EOSDT) |>
+  head(5)
+```
+
+## Derive/Impute End and Start Analysis Date/time and Relative Day {#datetime}
+
+This section derives `ASTDTM`, `ASTDT`, `ASTDY`, `AENDTM`, `AENDT`, and
+`AENDY`. The function `derive_vars_dtm()` can be used to derive `ASTDTM` and
+`AENDTM`. `ASTDT` and `AENDT` can be derived from `ASTDTM` and `AENDTM`
+respectively using `derive_vars_dtm_to_dt()`. `derive_vars_dy()` can be used
+to create `ASTDY` and `AENDY`.
+
+```{r datetime}
+adae <- adae |>
+  derive_vars_dtm(
+    dtc                = AESTDTC,
+    new_vars_prefix    = "AST",
+    highest_imputation = "M",
+    min_dates          = exprs(TRTSDT)
+  ) |>
+  derive_vars_dtm(
+    dtc                = AEENDTC,
+    new_vars_prefix    = "AEN",
+    highest_imputation = "M",
+    date_imputation    = "last",
+    time_imputation    = "last",
+    max_dates          = exprs(DTHDT, EOSDT)
+  ) |>
+  derive_vars_dtm_to_dt(exprs(ASTDTM, AENDTM)) |>
+  derive_vars_dy(
+    reference_date = TRTSDT,
+    source_vars    = exprs(ASTDT, AENDT)
+  )
+
+adae |>
+  select(USUBJID, AESTDTC, AEENDTC, ASTDTM, ASTDT, ASTDY, AENDTM, AENDT, AENDY) |>
+  head(5)
+```
+
+See also [Date and Time Imputation](imputation.qmd).
+
+## Derive Durations {#duration}
+
+The function `derive_vars_duration()` can be used to create the variables
+`ADURN` and `ADURU`.
+
+```{r duration}
+adae <- adae |>
+  derive_vars_duration(
+    new_var      = ADURN,
+    new_var_unit = ADURU,
+    start_date   = ASTDT,
+    end_date     = AENDT
+  )
+
+adae |>
+  select(USUBJID, AESTDTC, AEENDTC, ASTDT, AENDT, ADURN, ADURU) |>
+  head(5)
+```
+
+## Derive Planned and Actual Treatment {#trtpa}
+
+`TRTA` and `TRTP` must match at least one value of the character treatment
+variables in ADSL (e.g., `TRTxxA`/`TRTxxP`).
+
+An example of a simple implementation for a study without periods:
+
+```{r trtpa}
+adae <- mutate(adae, TRTP = TRT01P, TRTA = TRT01A)
+count(adae, TRTP, TRTA, TRT01P, TRT01A)
+```
+
+For studies with periods, see [Visit and Period Variables](visits_periods.qmd#treatment_bds).
+
+## Derive Date/Date-time of Last Dose {#last_dose}
+
+The function `derive_vars_joined()` can be used to derive the last dose date
+before the start of the event.
+
+```{r last-dose}
+ex_single <- derive_vars_dtm(
+  ex_single,
+  dtc             = EXSTDTC,
+  new_vars_prefix = "EXST",
+  flag_imputation = "none"
+)
+
+adae <- derive_vars_joined(
+  adae,
+  ex_single,
+  by_vars     = exprs(STUDYID, USUBJID),
+  new_vars    = exprs(LDOSEDTM = EXSTDTM),
+  join_vars   = exprs(EXSTDTM),
+  join_type   = "all",
+  order       = exprs(EXSTDTM),
+  filter_add  = (EXDOSE > 0 | (EXDOSE == 0 & grepl("PLACEBO", EXTRT))) & !is.na(EXSTDTM),
+  filter_join = EXSTDTM <= ASTDTM,
+  mode        = "last"
+)
+
+adae |>
+  select(USUBJID, AEDECOD, AESEQ, AESTDTC, AEENDTC, ASTDT, AENDT, LDOSEDTM) |>
+  head(5)
+```
+
+## Derive Treatment Dose and Unit {#dose_unit}
+
+In a similar manner, you could derive the treatment dose and unit at the time
+of the event.
+
+```{r dose-unit}
+ex_single <- derive_vars_dtm(
+  ex_single,
+  dtc             = EXENDTC,
+  new_vars_prefix = "EXEN",
+  time_imputation = "last",
+  flag_imputation = "none"
+)
+
+adae <- derive_vars_joined(
+  adae,
+  ex_single,
+  by_vars     = exprs(STUDYID, USUBJID),
+  new_vars    = exprs(DOSEON = EXDOSE, DOSEU = EXDOSU),
+  join_vars   = exprs(EXSTDTM, EXENDTM),
+  join_type   = "all",
+  filter_add  = (EXDOSE > 0 | (EXDOSE == 0 & grepl("PLACEBO", EXTRT))) & !is.na(EXSTDTM),
+  filter_join = EXSTDTM <= ASTDTM & (ASTDTM <= EXENDTM | is.na(EXENDTM))
+)
+
+adae |>
+  select(USUBJID, AEDECOD, AESEQ, AESTDTC, AEENDTC, ASTDT, AENDT, DOSEON, DOSEU) |>
+  head(5)
+```
+
+## Derive Severity, Causality, and Toxicity Grade {#severity}
+
+The variables `ASEV`, `AREL`, and `ATOXGR` can be added using simple
+`dplyr::mutate()` assignments if no imputation is required.
+
+```{r severity}
+adae <- adae |>
+  mutate(
+    ASEV = AESEV,
+    AREL = AEREL
+  )
+```
+
+## Derive Treatment Emergent Flag {#trtflag}
+
+To derive the treatment emergent flag `TRTEMFL`, use `derive_var_trtemfl()`.
+In the example below, we use a 30-day window after treatment end.
+
+```{r trtemfl}
+adae <- adae |>
+  derive_var_trtemfl(
+    trt_start_date = TRTSDT,
+    trt_end_date   = TRTEDT,
+    end_window     = 30
+  )
+
+adae |>
+  select(USUBJID, TRTSDT, TRTEDT, AESTDTC, ASTDT, TRTEMFL) |>
+  head(5)
+```
+
+## Derive Occurrence Flags {#occflag}
+
+The function `derive_var_extreme_flag()` can help derive variables such as
+`AOCCIFL`, `AOCCPIFL`, `AOCCSIFL`, and `AOCCzzFL`.
+
+Flag first occurrence of most severe adverse event:
+
+```{r occflag}
+adae <- adae |>
+  restrict_derivation(
+    derivation = derive_var_extreme_flag,
+    args = params(
+      by_vars = exprs(USUBJID),
+      order   = exprs(
+        as.integer(factor(
+          ASEV,
+          levels = c("DEATH THREATENING", "SEVERE", "MODERATE", "MILD")
+        )),
+        ASTDTM, AESEQ
+      ),
+      new_var = AOCCIFL,
+      mode    = "first"
+    ),
+    filter = TRTEMFL == "Y"
+  )
+
+adae |>
+  select(USUBJID, ASTDTM, ASEV, AESEQ, TRTEMFL, AOCCIFL) |>
+  head(5)
+```
+
+## Derive Query Variables {#query}
+
+For deriving query variables such as `SMQzzNAM`, `SMQzzCD`, `SMQzzSC`,
+`SMQzzSCN`, or `CQzzNAM`, the `derive_vars_query()` function can be used.
+See [Queries Dataset](queries_dataset.qmd) for a detailed description.
+
+```{r query}
+queries <- admiral::queries
+
+adae1 <- tribble(
+  ~USUBJID, ~ASTDTM,               ~AETERM,                               ~AESEQ, ~AEDECOD,                              ~AELLT,       ~AELLTCD,
+  "01",     "2020-06-02 23:59:59", "ALANINE AMINOTRANSFERASE ABNORMAL",   3,      "Alanine aminotransferase abnormal",   NA_character_, NA_integer_,
+  "02",     "2020-06-05 23:59:59", "BASEDOW'S DISEASE",                   5,      "Basedow's disease",                   NA_character_, 1L,
+  "03",     "2020-06-07 23:59:59", "SOME TERM",                           2,      "Some query",                          "Some term",   NA_integer_,
+  "05",     "2020-06-09 23:59:59", "ALVEOLAR PROTEINOSIS",                7,      "Alveolar proteinosis",                NA_character_, NA_integer_
+)
+
+adae_query <- derive_vars_query(dataset = adae1, dataset_queries = queries)
+adae_query |> head(5)
+```
+
+## Add ADSL Variables {#adsl_vars}
+
+If needed, the other `ADSL` variables can now be added:
+
+```{r adsl-vars}
+adae <- adae |>
+  derive_vars_merged(
+    dataset_add = select(adsl, !!!negate_vars(adsl_vars)),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+adae |>
+  select(USUBJID, AEDECOD, ASTDTM, DTHDT, RFSTDTC, RFENDTC, AGE, AGEU, SEX) |>
+  head(5)
+```
+
+## Derive Analysis Sequence Number {#aseq}
+
+The function `derive_var_obs_number()` can be used for deriving `ASEQ` to
+ensure uniqueness of subject records within the dataset.
+
+```{r aseq}
+adcm <- tribble(
+  ~USUBJID,       ~ASTDTM,          ~CMSEQ, ~CMDECOD,         ~ATC1CD, ~ATC2CD, ~ATC3CD, ~ATC4CD,
+  "BP40257-1001", "2013-07-05 UTC", "14",   "PARACETAMOL",    "N",     "N02",   "N02B",  "N02BE",
+  "BP40257-1001", "2013-08-15 UTC", "18",   "SOLUMEDROL",     "D",     "D10",   "D10A",  "D10AA",
+  "BP40257-1001", "2013-08-15 UTC", "18",   "SOLUMEDROL",     "D",     "D07",   "D07A",  "D07AA",
+  "BP40257-1001", "2013-08-15 UTC", "18",   "SOLUMEDROL",     "H",     "H02",   "H02A",  "H02AB",
+  "BP40257-1002", "2012-12-15 UTC", "19",   "SPIRONOLACTONE", "C",     "C03",   "C03D",  "C03DA"
+)
+
+adcm |>
+  derive_var_obs_number(
+    by_vars    = exprs(USUBJID),
+    order      = exprs(ASTDTM, CMSEQ, ATC1CD, ATC2CD, ATC3CD, ATC4CD),
+    new_var    = ASEQ,
+    check_type = "error"
+  )
+```
+
+## Add Labels and Attributes {#attributes}
+
+See the equivalent section in [Creating ADSL](adsl.qmd#attributes) for a
+discussion of packages like `{metacore}`, `{metatools}`, and `{xportr}` for
+applying metadata.
+
+## Example Script
+
+An ADAE template script is available in the `{admiral}` package:
+
+```r
+use_ad_template("ADAE")
+```
+
+## See Also
+
+-   [Date/Time Imputation](imputation.qmd)
+-   [Queries Dataset](queries_dataset.qmd)
+-   [Visit and Period Variables](visits_periods.qmd)

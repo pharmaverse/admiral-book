@@ -1,0 +1,16 @@
+# Special Topics {.unnumbered}
+
+This part covers specific techniques and dataset types that cut across multiple
+ADaM structures.
+
+| Topic | Description |
+|---|---|
+| [Date/Time Imputation](imputation.qmd) | How to impute partial dates and times |
+| [Visit and Period Variables](visits_periods.qmd) | Deriving visit and period variables |
+| [Hy's Law](hys_law.qmd) | Deriving Hy's Law criteria for hepatotoxicity |
+| [Lab Grading](lab_grading.qmd) | Applying CTCAE and other lab grading schemes |
+| [Estimands](estimands.qmd) | Creating intercurrent event flag variables for estimands |
+| [Higher Order Functions](higher_order.qmd) | Using `call_derivation()`, `restrict_derivation()`, and `slice_derivation()` |
+| [Generic Derivations](generic.qmd) | Using general-purpose derivation functions |
+| [Questionnaires](questionnaires.qmd) | Deriving questionnaire scores |
+| [Queries Dataset](queries_dataset.qmd) | Using the queries dataset for MedDRA groupings |

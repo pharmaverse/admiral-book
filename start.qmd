@@ -1,0 +1,11 @@
+# Getting Started {.unnumbered}
+
+This part introduces the `{admiral}` package and the foundational concepts you
+need to understand before working through the ADaM dataset chapters.
+
+-   [Introduction](introduction.qmd) — an overview of `{admiral}` and its main
+    function types, with worked examples.
+-   [Programming Concepts and Conventions](concepts_conventions.qmd) — covers
+    the conventions shared across the entire `{admiral}` family of packages,
+    including how `{admiral}` handles missing values, expressions, and
+    R/SAS differences.

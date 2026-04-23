@@ -1,0 +1,18 @@
+# ADaM Data Structures {.unnumbered}
+
+This part provides step-by-step guides to creating each of the main ADaM
+dataset types using `{admiral}`.
+
+The CDISC ADaM Implementation Guide (ADaMIG v1.3) defines three core data
+structures:
+
+| Dataset type | Description | Chapter |
+|---|---|---|
+| ADSL | Subject-level analysis dataset | [Creating ADSL](adsl.qmd) |
+| OCCDS | Occurrence data structure | [Creating an OCCDS ADaM](occds.qmd) |
+| BDS Findings | Basic data structure – findings | [Creating a BDS Findings ADaM](bds_finding.qmd) |
+| BDS Exposure | Basic data structure – exposure | [Creating a BDS Exposure ADaM](bds_exposure.qmd) |
+| BDS TTE | Basic data structure – time to event | [Creating a BDS Time-to-Event ADaM](bds_tte.qmd) |
+
+Each chapter contains a complete, end-to-end example using SDTM data from the
+`{pharmaversesdtm}` package (CDISC Pilot Study).

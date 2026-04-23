@@ -1,0 +1,142 @@
+# Queries Dataset
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+A **queries dataset** is a reference dataset that defines groupings of
+preferred terms (PTs) or lower-level terms (LLTs) from MedDRA or
+drug groupings. These groupings are used to derive additional variables
+in OCCDS ADaM datasets such as `ADAE` and `ADCM`.
+
+Examples of query types:
+
+-   **Standardized MedDRA Queries (SMQs)** — groupings of MedDRA PTs and/or
+    LLTs that identify adverse events related to a medical condition or
+    area of special interest.
+-   **Customised Queries (CQs)** — study- or company-specific groupings.
+-   **Standardized Drug Groupings (SDGs)** — groupings of drugs by class
+    or indication.
+
+`{admiral}` provides the `create_query_data()` function to build a
+queries dataset, and `derive_vars_query()` to derive the corresponding
+variables in an ADaM dataset.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(tibble)
+```
+
+## Structure of the Queries Dataset
+
+The queries dataset provided by `{admiral}` (`admiral::queries`) has the
+following key columns:
+
+| Column | Description |
+|---|---|
+| `PREFIX` | Prefix used in the derived variable names (e.g. `"SMQ01"`) |
+| `GRPNAME` | Name of the query group |
+| `GRPID` | Numeric ID of the group |
+| `SCOPE` | Scope of the query (`"BROAD"` or `"NARROW"`) |
+| `SCOPEN` | Numeric scope (1 = broad, 2 = narrow) |
+| `SRCVAR` | Source variable in the ADaM dataset (`"AEDECOD"`, `"AELLT"`, etc.) |
+| `TERMCHAR` | Character term value to match |
+| `TERMNUM` | Numeric term code to match (`AELLTCD`) |
+
+```{r show-queries}
+admiral::queries |>
+  select(PREFIX, GRPNAME, GRPID, SCOPE, SCOPEN, SRCVAR, TERMCHAR, TERMNUM) |>
+  head(10)
+```
+
+## Using `derive_vars_query()`
+
+`derive_vars_query()` adds query-related variables to an ADaM dataset.
+For each row in the queries dataset, it looks for a match in the
+specified `SRCVAR` column of the input dataset and, where found, adds
+the corresponding group name and scope variables.
+
+```{r derive-vars-query}
+adae1 <- tribble(
+  ~USUBJID, ~ASTDTM,               ~AETERM,                              ~AESEQ, ~AEDECOD,                             ~AELLT,        ~AELLTCD,
+  "01",     "2020-06-02 23:59:59", "ALANINE AMINOTRANSFERASE ABNORMAL",  3,      "Alanine aminotransferase abnormal",  NA_character_, NA_integer_,
+  "02",     "2020-06-05 23:59:59", "BASEDOW'S DISEASE",                  5,      "Basedow's disease",                  NA_character_, 1L,
+  "03",     "2020-06-07 23:59:59", "SOME TERM",                          2,      "Some query",                         "Some term",   NA_integer_,
+  "05",     "2020-06-09 23:59:59", "ALVEOLAR PROTEINOSIS",               7,      "Alveolar proteinosis",               NA_character_, NA_integer_
+)
+
+adae_with_queries <- derive_vars_query(
+  dataset         = adae1,
+  dataset_queries = admiral::queries
+)
+
+adae_with_queries |>
+  select(USUBJID, AEDECOD, starts_with("SMQ"), starts_with("CQ")) |>
+  head(5)
+```
+
+## Deriving SDG Variables for ADCM
+
+Similarly, `derive_vars_query()` can be used to derive Standardized Drug
+Grouping (SDG) variables:
+
+```{r sdg}
+sdg <- tribble(
+  ~PREFIX, ~GRPNAME,          ~GRPID, ~SCOPE,  ~SCOPEN, ~SRCVAR,   ~TERMCHAR,          ~TERMNUM,
+  "SDG01", "Diuretics",           11, "BROAD", 1,       "CMDECOD", "Diuretic 1",       NA,
+  "SDG01", "Diuretics",           11, "BROAD", 1,       "CMDECOD", "Diuretic 2",       NA,
+  "SDG02", "Corticosteroids",     12, "BROAD", 1,       "CMDECOD", "Corticosteroid 1", NA,
+  "SDG02", "Corticosteroids",     12, "BROAD", 1,       "CMDECOD", "Corticosteroid 2", NA,
+  "SDG02", "Corticosteroids",     12, "BROAD", 1,       "CMDECOD", "Corticosteroid 3", NA,
+)
+
+adcm <- tribble(
+  ~USUBJID, ~ASTDTM,               ~CMDECOD,
+  "01",     "2020-06-02 23:59:59", "Diuretic 1",
+  "02",     "2020-06-05 23:59:59", "Diuretic 1",
+  "03",     "2020-06-07 23:59:59", "Corticosteroid 2",
+  "05",     "2020-06-09 23:59:59", "Diuretic 2"
+)
+
+derive_vars_query(adcm, sdg)
+```
+
+## Creating a Queries Dataset with `create_query_data()`
+
+`create_query_data()` builds a queries dataset from a structured list of
+`query()` objects. This is useful when SMQ or SDG definitions are
+managed programmatically (e.g. sourced from a validated look-up table):
+
+```{r create-query-data}
+my_smq <- query(
+  prefix  = "SMQ01",
+  name    = "My Custom Query",
+  id      = 42,
+  scope   = "BROAD",
+  add_scope_num = TRUE,
+  definition = list(
+    basket_select(
+      name    = "My Custom Query",
+      scope   = "BROAD",
+      type    = "smq"
+    )
+  )
+)
+```
+
+::: callout-note
+The `basket_select()` function retrieves SMQ/SDG definitions from a
+validated MedDRA dictionary. In a real implementation, this step would
+be configured to connect to your organisation's MedDRA database.
+:::
+
+## See Also
+
+-   [Creating an OCCDS ADaM](occds.qmd)
+-   [Generic Derivations](generic.qmd)

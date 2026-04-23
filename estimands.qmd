@@ -1,0 +1,164 @@
+# Estimands
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+The ICH E9(R1) addendum introduced the concept of **estimands** to align
+the clinical question of interest with the analysis. The estimand
+framework requires that intercurrent events (ICEs) — events occurring
+after treatment initiation that can affect the interpretation of the
+outcome — are pre-specified and handled according to one of the defined
+strategies (treatment policy, composite, while-on-treatment, hypothetical,
+or principal stratum).
+
+In ADaM terms, these strategies are implemented by creating ICE flag
+variables that can be used to subset or weight analyses. The `{admiral}`
+package provides functions to derive these flag variables.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+library(lubridate)
+library(tibble)
+```
+
+## Common Intercurrent Event Flags
+
+### Treatment Policy Strategy
+
+Under the treatment policy strategy, observations are included regardless
+of whether an ICE occurred. No additional derivation is required —
+all observations are used.
+
+### While-on-Treatment Strategy
+
+The while-on-treatment strategy includes only observations collected while
+the subject was on treatment. The flag `ONTRTFL` can be used:
+
+```{r ontrtfl}
+adsl <- admiral::admiral_adsl
+vs   <- pharmaversesdtm::vs |> convert_blanks_to_na()
+
+advs <- vs |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:4]) |>
+  derive_vars_dt(new_vars_prefix = "A", dtc = VSDTC) |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT, TRTEDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+advs <- advs |>
+  derive_var_ontrtfl(
+    start_date     = ADT,
+    ref_start_date = TRTSDT,
+    ref_end_date   = TRTEDT
+  )
+
+advs |>
+  select(USUBJID, VSTESTCD, ADT, TRTSDT, TRTEDT, ONTRTFL) |>
+  head(8)
+```
+
+### Composite Strategy
+
+The composite strategy uses an alternative value (e.g. worst outcome or
+`NA`) for observations after an ICE. The ICE date is typically merged
+from `ADSL` or derived from `DS`.
+
+```{r composite}
+# Example: flag post-discontinuation records
+ds <- pharmaversesdtm::ds |> convert_blanks_to_na()
+
+# Get discontinuation dates
+disc_dates <- ds |>
+  filter(DSDECOD == "STUDY DISCONTINUATION") |>
+  derive_vars_dt(new_vars_prefix = "DISC", dtc = DSSTDTC) |>
+  select(STUDYID, USUBJID, DISCDT)
+
+advs <- advs |>
+  derive_vars_merged(
+    dataset_add = disc_dates,
+    by_vars     = exprs(STUDYID, USUBJID)
+  ) |>
+  mutate(
+    POSTDISCFL = if_else(!is.na(DISCDT) & ADT > DISCDT, "Y", NA_character_)
+  )
+
+advs |>
+  filter(!is.na(POSTDISCFL)) |>
+  select(USUBJID, VSTESTCD, ADT, DISCDT, POSTDISCFL) |>
+  head(5)
+```
+
+### Hypothetical Strategy
+
+The hypothetical strategy considers outcomes as if the ICE had not
+occurred. This is typically implemented through sensitivity analyses
+(e.g. multiple imputation). The flag variable identifies records where
+the ICE occurred so that they can be treated appropriately in the model.
+
+```{r hypothetical}
+advs <- advs |>
+  mutate(
+    ICEFLAG = if_else(!is.na(DISCDT) & ADT >= DISCDT, "Y", NA_character_)
+  )
+
+advs |>
+  filter(!is.na(ICEFLAG)) |>
+  select(USUBJID, VSTESTCD, ADT, DISCDT, ICEFLAG) |>
+  head(5)
+```
+
+## Deriving Rescue Medication Use Flag
+
+A common ICE in many trials is the use of rescue medication. The flag
+can be derived using `derive_var_merged_exist_flag()`:
+
+```{r rescue-med}
+cm <- tibble::tribble(
+  ~STUDYID, ~USUBJID, ~CMTRT,       ~CMSTDTC,
+  "A",      "1",      "RESCUE MED", "2022-03-15",
+  "A",      "2",      "IBUPROFEN",  "2022-04-01"
+)
+
+adsl_ex <- tibble::tribble(
+  ~STUDYID, ~USUBJID,
+  "A",      "1",
+  "A",      "2",
+  "A",      "3"
+)
+
+adsl_ex <- adsl_ex |>
+  derive_var_merged_exist_flag(
+    dataset_add = cm,
+    by_vars     = exprs(STUDYID, USUBJID),
+    new_var     = RESCUEFL,
+    condition   = CMTRT == "RESCUE MED"
+  )
+
+adsl_ex
+```
+
+## Notes on Implementation
+
+-   The choice of ICE flag names (e.g. `ONTRTFL`, `POSTDISCFL`,
+    `ICEFLAG`) should follow the study SAP and your organisation's ADaM
+    programming conventions.
+-   Multiple ICEs may need to be handled within the same dataset; each
+    should have a dedicated flag variable.
+-   Consult the ICH E9(R1) addendum for the full definition of each
+    estimand strategy.
+
+## See Also
+
+-   [Creating ADSL](adsl.qmd)
+-   [Creating a BDS Time-to-Event ADaM](bds_tte.qmd)
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)

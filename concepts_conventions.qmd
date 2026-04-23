@@ -1,0 +1,293 @@
+# Programming Concepts and Conventions
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(dplyr)
+library(rlang)
+library(admiral)
+```
+
+## Introduction
+
+This chapter discusses the common programming concepts and conventions adopted
+within the `{admiral}` family of packages. It is intended to be a user-facing
+companion to the
+[Programming Strategy](https://pharmaverse.github.io/admiraldev/articles/programming_strategy.html)
+developer guide.
+
+For common `{admiral}` frequently asked questions, see the [FAQ](faq.qmd)
+chapter.
+
+## Input and Output
+
+It is expected that the input dataset is **not grouped**. Otherwise an error is
+issued.
+
+The output dataset is **ungrouped**. The observations are not ordered in a
+dedicated way. In particular, the order of the observations of the input dataset
+may not be preserved.
+
+## `{admiral}` Functions and Options
+
+As a general principle, the behaviour of the `{admiral}` functions is only
+determined by their input, not by any global object — i.e. all inputs like
+datasets, variable names, and options must be provided to the function via
+arguments. Correspondingly, functions do not have any side-effects like creating
+or modifying global objects, printing, or writing files.
+
+An exception to the above principle is our approach to package options (see
+`get_admiral_option()` and `set_admiral_options()`), which allow for
+user-defined defaults on commonly used function arguments. For instance, the
+option `subject_keys` is pre-defined as `exprs(STUDYID, USUBJID)`, but can be
+modified using `set_admiral_options(subject_keys = exprs(...))` at the top of a
+script.
+
+## Handling of Missing Values {#missing}
+
+When using the `{haven}` package to read SAS datasets into R, SAS-style
+character missing values (i.e. `""`) are **not** converted into proper R `NA`
+values. Rather they are kept as empty strings. This is problematic for any
+downstream data processing because R handles `""` just like any other string.
+Thus, before any data manipulation, SAS blanks should be converted to R `NA`s
+using `{admiral}`'s `convert_blanks_to_na()` function:
+
+```r
+dm <- haven::read_sas("dm.sas7bdat") |>
+  convert_blanks_to_na()
+```
+
+Note that any logical operator applied to an `NA` value **always** returns `NA`
+rather than `TRUE` or `FALSE`.
+
+```{r na-logical}
+visits <- c("Baseline", NA, "Screening", "Week 1 Day 7")
+visits != "Baseline"
+```
+
+The only exception is `is.na()`, which returns `TRUE` if the input is `NA`.
+
+```{r is-na}
+is.na(visits)
+```
+
+Thus, to filter all visits which are not `"Baseline"` the following condition
+must be used:
+
+```{r filter-na}
+visits != "Baseline" | is.na(visits)
+```
+
+Also note that most aggregation functions, like `mean()` or `max()`, also return
+`NA` if any element of the input vector is missing.
+
+```{r mean-na}
+mean(c(1, NA, 2))
+```
+
+To avoid this behaviour you must explicitly set `na.rm = TRUE`.
+
+```{r mean-narm}
+mean(c(1, NA, 2), na.rm = TRUE)
+```
+
+This is very important to keep in mind when using `{admiral}`'s aggregation
+functions such as `derive_summary_records()`.
+
+## Expressions in Scripts {#exprs}
+
+### Quoting and Unquoting: `expr()`, `exprs()`, `!!` and `!!!`
+
+#### `expr()` and `exprs()`
+
+`expr()` is a function from the `{rlang}` package, which is used to create an
+**expression**. The expression is not evaluated — rather, it is passed to the
+derivation function, which evaluates it in its own environment. `exprs()` is
+the plural version: it accepts multiple comma-separated items and returns a
+list of expressions.
+
+```{r expr-demo}
+library(rlang)
+
+adae <- data.frame(USUBJID = "XXX-1", AEDECOD = "HEADACHE")
+
+# Return the adae object
+adae
+
+# Return an expression
+expr(adae)
+```
+
+When used within an `{admiral}` derivation function, `expr()` and `exprs()`
+allow the function to evaluate the expressions in the context of the input
+dataset. As a result, users can pass variable names of datasets to the function
+without wrapping them in quotation marks.
+
+The expressions framework is powerful because users are able to intuitively
+"inject code" into `{admiral}` functions (through the function parameters)
+using very similar syntax to open code, with the exception being an outer
+`exprs()` wrapper. For instance, in the `derive_vars_merged()` call below, the
+user is merging `adsl` with `ex` and is able to filter `ex` prior to the merge
+using an expression passed to the `filter_add` parameter:
+
+```r
+derive_vars_merged(
+  adsl,
+  dataset_add = ex,
+  filter_add  = !is.na(EXENDTM),
+  by_vars     = exprs(STUDYID, USUBJID),
+  new_vars    = exprs(
+    TRTEDTM  = EXENDTM,
+    TRTETMF  = EXENTMF,
+    COMPTRT  = if_else(!is.na(EXENDTM), "Y", "N")
+  ),
+  order = exprs(EXENDTM),
+  mode  = "last"
+)
+```
+
+#### Bang-Bang (`!!`) and Bang-Bang-Bang (`!!!`) {#unquoting}
+
+Sometimes you may want to construct an expression using other, pre-existing
+expressions. However, it's not immediately clear how to achieve this because
+expressions inherently pause evaluation of your code before it is executed:
+
+```{r bang-bang-intro}
+a <- expr(2)
+b <- expr(3)
+
+expr(a + b)
+# NOT 2 + 3
+```
+
+This is where `!!` (bang-bang) comes in. Provided by the `{rlang}` package, it
+allows you to inject the contents of an expression into another expression.
+By using `!!` you are **unquoting** an expression, i.e. evaluating it before
+you pass it onwards.
+
+```{r bang-bang}
+expr(!!a + !!b)
+```
+
+`!!!` (bang-bang-bang) is the plural version of `!!` and can be used to
+unquote a list of expressions:
+
+```{r bang-bang-bang}
+exprs(!!!list(a, b))
+```
+
+Within `{admiral}`, this operator can be useful when you need to unquote a
+list of variables stored as expressions. One example is the `{admiral}` subject
+keys:
+
+```{r subject-keys}
+get_admiral_option("subject_keys")
+```
+
+If we want to use the subject keys stored within this `{admiral}` option to
+subset a dataset, we need to use `!!!` to unquote this list:
+
+```{r subject-keys-select}
+adcm <- data.frame(STUDYID = "XXX", USUBJID = "XXX-1", CMTRT = "ASPIRIN")
+adcm
+
+# This doesn't work — we are not unquoting the subject keys
+try(adcm |> select(get_admiral_option("subject_keys")), silent = TRUE)
+
+# This works because we are unquoting the subject keys
+adcm |> select(!!!get_admiral_option("subject_keys"))
+```
+
+#### Summary
+
+The expressions framework may seem slightly unfamiliar at first, but it allows
+for significant power and flexibility. For a comprehensive treatment of
+expressions, see
+[Chapter 18](https://adv-r.hadley.nz/expressions.html) and
+[Chapter 19](https://adv-r.hadley.nz/quasiquotation.html) of *Advanced R*.
+Chapter 19 specifically covers the concept of unquoting in much more detail.
+
+### Common Pitfalls {#pitfalls}
+
+Expressions are powerful, but they can also lead to misunderstandings. Let's
+set up some dummy data to explore common issues.
+
+```{r pitfall-data}
+vs <- tribble(
+  ~USUBJID,  ~VSTESTCD, ~VISIT,       ~VSSTRESN, ~VSSTRESU, ~VSDTC,
+  "01-1301", "WEIGHT",  "SCREENING",  82.1,      "kg",      "2013-08-29",
+  "01-1301", "WEIGHT",  "WEEK 2",     81.19,     "kg",      "2013-09-15",
+  "01-1301", "WEIGHT",  "WEEK 4",     82.56,     "kg",      "2013-09-24",
+  "01-1302", "BMI",     "SCREENING",  20.1,      "kg/m2",   "2013-08-29",
+  "01-1302", "BMI",     "WEEK 2",     20.2,      "kg/m2",   "2013-09-15",
+  "01-1302", "BMI",     "WEEK 4",     19.9,      "kg/m2",   "2013-09-24"
+)
+
+dm <- tribble(
+  ~USUBJID,  ~AGE,
+  "01-1301", 18
+)
+```
+
+#### Pitfall 1: Passing an object name instead of an expression {#pitfall1}
+
+When writing more complex `{admiral}` code it can be easy to mistakenly pass
+the wrong input to an argument that expects an expression. The code below fails
+because `my_expression` is not an expression — it is the **name** of an object
+in the global environment *containing* an expression.
+
+```{r pitfall1-fail}
+#| error: true
+my_expression <- expr(VSTESTCD == "WEIGHT" & VISIT == "SCREENING")
+
+derive_vars_merged(
+  dm,
+  dataset_add = select(vs, USUBJID, VSTESTCD, VISIT),
+  by_vars     = exprs(USUBJID),
+  filter_add  = my_expression
+)
+```
+
+To fix this code, we need to [unquote](#unquoting) `my_expression` so that the
+expression it holds is passed correctly:
+
+```{r pitfall1-fix}
+derive_vars_merged(
+  dm,
+  dataset_add = select(vs, USUBJID, VSTESTCD, VISIT),
+  by_vars     = exprs(USUBJID),
+  filter_add  = !!my_expression
+)
+```
+
+#### Pitfall 2: Expressions referencing variables that don't exist
+
+Even if an actual expression *is* passed, you must make sure it can be
+evaluated within the dataset of interest. This may seem trivial, but it is a
+common pitfall because expressions delay evaluation of code and can therefore
+delay the identification of issues:
+
+```{r pitfall2}
+#| error: true
+filter_vs_and_merge <- function(my_expression) {
+  derive_vars_merged(
+    dm,
+    dataset_add = select(vs, USUBJID, VSTESTCD, VISIT),
+    by_vars     = exprs(USUBJID),
+    filter_add  = !!my_expression
+  )
+}
+
+# This works
+filter_vs_and_merge(expr(VSTESTCD == "WEIGHT" & VISIT == "SCREENING"))
+
+# This fails because VSTPT was dropped from vs inside filter_vs_and_merge()
+filter_vs_and_merge(
+  expr(VSTESTCD == "WEIGHT" & VISIT == "SCREENING" & VSTPT == "PREDOSE")
+)
+```
+
+## See Also
+
+-   [Programming Strategy](https://pharmaverse.github.io/admiraldev/articles/programming_strategy.html)
+-   [FAQ](faq.qmd)

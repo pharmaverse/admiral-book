@@ -1,0 +1,207 @@
+# Creating a BDS Exposure ADaM
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Introduction
+
+This chapter describes creating a BDS (Basic Data Structure) Exposure ADaM.
+Examples are presented and tested in the context of `ADEX` (Exposure dataset),
+which is based on the `EX` SDTM domain.
+
+::: callout-note
+All examples assume CDISC SDTM and/or ADaM format as input unless otherwise
+specified.
+:::
+
+## Programming Workflow
+
+1.  [Read in Data](#readdata)
+2.  [Derive/Impute Start and End Date/Time of Exposure](#datetime)
+3.  [Assign `PARAMCD`, `PARAM`, `PTYPE`](#paramcd)
+4.  [Derive Analysis Value (`AVAL`)](#aval)
+5.  [Derive Timing Variables](#timing)
+6.  [Add Treatment Variables](#trt)
+7.  [Add ADSL Variables](#adsl_vars)
+8.  [Derive Analysis Sequence Number (`ASEQ`)](#aseq)
+9.  [Add Labels and Attributes](#attributes)
+
+## Read in Data {#readdata}
+
+For example purposes, the CDISC Pilot SDTM datasets — which are included in
+`{pharmaversesdtm}` — are used.
+
+```{r load-packages}
+#| message: false
+#| warning: false
+library(admiral)
+library(dplyr)
+library(pharmaversesdtm)
+library(lubridate)
+```
+
+```{r load-data}
+ex   <- pharmaversesdtm::ex   |> convert_blanks_to_na()
+adsl <- admiral::admiral_adsl
+```
+
+```{r filter-data}
+ex <- ex |>
+  filter(USUBJID %in% unique(adsl$USUBJID)[1:6])
+```
+
+## Derive/Impute Start and End Date/Time of Exposure {#datetime}
+
+The function `derive_vars_dtm()` can be used to derive `EXSTDTM` and `EXENDTM`.
+
+```{r datetime}
+ex_ext <- ex |>
+  derive_vars_dtm(
+    dtc             = EXSTDTC,
+    new_vars_prefix = "EXST"
+  ) |>
+  derive_vars_dtm(
+    dtc             = EXENDTC,
+    new_vars_prefix = "EXEN",
+    time_imputation = "last"
+  )
+
+ex_ext |>
+  select(USUBJID, EXTRT, EXSTDTC, EXSTDTM, EXENDTC, EXENDTM) |>
+  head(5)
+```
+
+## Assign `PARAMCD`, `PARAM`, `PTYPE` {#paramcd}
+
+Exposure parameters can be derived from the `EX` data.
+Typical exposure parameters include:
+
+-   `DOSE` — planned dose amount
+-   `DURD` — duration of exposure
+-   `TNDOSE` — total number of doses
+
+A parameter look-up table can be used to map them:
+
+```{r paramcd}
+param_lookup <- tribble(
+  ~PTYPE,     ~PARAMCD, ~PARAM,
+  "PLANNED",  "DOSEP",  "Planned Dose Amount (mg)",
+  "ACTUAL",   "DOSEA",  "Actual Dose Amount (mg)"
+)
+
+adex <- bind_rows(
+  ex_ext |> mutate(PTYPE = "PLANNED", AVAL = EXDOSE),
+  ex_ext |> mutate(PTYPE = "ACTUAL",  AVAL = EXDOSE)
+) |>
+  derive_vars_merged(
+    dataset_add = param_lookup,
+    by_vars     = exprs(PTYPE)
+  )
+
+adex |>
+  select(USUBJID, EXTRT, PTYPE, PARAMCD, PARAM, AVAL) |>
+  head(5)
+```
+
+## Derive Analysis Value {#aval}
+
+For exposure ADaMs, `AVAL` is typically the dose amount, number of doses, or
+duration. For example, to derive a cumulative dose parameter:
+
+```{r aval}
+# Derive duration in days
+adex <- adex |>
+  derive_vars_duration(
+    new_var      = EXDURD,
+    new_var_unit = EXDURDU,
+    start_date   = EXSTDTM,
+    end_date     = EXENDTM,
+    in_unit      = "days",
+    out_unit     = "days",
+    add_one      = TRUE
+  )
+
+adex |>
+  select(USUBJID, EXTRT, EXSTDTM, EXENDTM, EXDURD) |>
+  head(5)
+```
+
+## Derive Timing Variables {#timing}
+
+```{r timing}
+adex <- adex |>
+  derive_vars_dtm_to_dt(exprs(EXSTDTM, EXENDTM)) |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(TRTSDT),
+    by_vars     = exprs(STUDYID, USUBJID)
+  ) |>
+  derive_vars_dy(
+    reference_date = TRTSDT,
+    source_vars    = exprs(EXSTDT)
+  )
+
+adex |>
+  select(USUBJID, EXSTDTM, EXSTDT, EXSTDY) |>
+  head(5)
+```
+
+## Add Treatment Variables {#trt}
+
+```{r trt}
+adex <- adex |>
+  mutate(TRTP = EXTRT, TRTA = EXTRT)
+```
+
+## Add ADSL Variables {#adsl_vars}
+
+```{r adsl-vars}
+adex <- adex |>
+  derive_vars_merged(
+    dataset_add = adsl,
+    new_vars    = exprs(AGE, SEX, RACE),
+    by_vars     = exprs(STUDYID, USUBJID)
+  )
+
+adex |>
+  select(USUBJID, PARAMCD, AVAL, AGE, SEX, RACE) |>
+  head(5)
+```
+
+## Derive Analysis Sequence Number {#aseq}
+
+```{r aseq}
+adex <- adex |>
+  derive_var_obs_number(
+    by_vars    = exprs(STUDYID, USUBJID),
+    order      = exprs(PARAMCD, EXSTDTM, EXSEQ),
+    new_var    = ASEQ,
+    check_type = "error"
+  )
+
+adex |>
+  select(USUBJID, PARAMCD, EXSTDTM, EXSEQ, ASEQ) |>
+  head(5)
+```
+
+## Add Labels and Attributes {#attributes}
+
+See the equivalent section in [Creating ADSL](adsl.qmd#attributes) for a
+discussion of packages like `{metacore}`, `{metatools}`, and `{xportr}` for
+applying metadata.
+
+## Example Script
+
+An ADEX template script is available in the `{admiral}` package:
+
+```r
+use_ad_template("ADEX")
+```
+
+## See Also
+
+-   [Creating ADSL](adsl.qmd)
+-   [Date/Time Imputation](imputation.qmd)
+-   [Creating a BDS Findings ADaM](bds_finding.qmd)

@@ -42,6 +42,13 @@ vignettes/*.pdf
 # pkgdown site
 docs/
 
+# Quarto book output
+_book/
+_freeze/
+
+# Quarto cache
+.quarto/
+
 # translation temp files
 po/*~
 
