@@ -60,7 +60,6 @@ format:
   html:
     theme:
       - cosmo
-      - style.css
     code-link: true
     author-meta: "Pharmaverse admiral team"
     callout-appearance: simple

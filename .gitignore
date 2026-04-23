@@ -54,3 +54,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+admiralbook.Rcheck/
+admiralbook*.tar.gz
+admiralbook*.tgz
+
+/.quarto/
+**/*.quarto_ipynb

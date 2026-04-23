@@ -1,57 +1,38 @@
 # Welcome {.unnumbered}
 
-This is the online version of **The admiral Book**, a guide to creating ADaM
-(Analysis Data Model) datasets using the
-[`{admiral}`](https://pharmaverse.github.io/admiral/) R package.
+This is the online version of **The admiral Book**, a guide to creating ADaM (Analysis Data Model) datasets using the [`{admiral}`](https://pharmaverse.github.io/admiral/) R package.
 
 ## What is admiral?
 
-`{admiral}` (**A**DaM in **R** **A**sset **L**ibrary) is an R package developed
-by the [pharmaverse](https://pharmaverse.org/) community. It provides a
-modular, open-source toolbox for building ADaM datasets from SDTM data.
+`{admiral}` (**A**DaM in **R** **A**sset **L**ibrary) is an R package developed by the [pharmaverse](https://pharmaverse.org/) community. It provides a modular, open-source toolbox for building ADaM datasets from SDTM data.
 
-The package follows the CDISC ADaM Implementation Guide (ADaMIG) and provides a
-rich set of functions for the most common ADaM derivations. Each derivation is
-provided as a function call, making it easy to build, audit, and adjust ADaM
-programs.
+The package follows the CDISC ADaM Implementation Guide (ADaMIG) and provides a rich set of functions for the most common ADaM derivations. Each derivation is provided as a function call, making it easy to build, audit, and adjust ADaM programs.
 
 ## What is this book for?
 
 This book is a teaching resource that accompanies the `{admiral}` package. It:
 
 -   Explains the concepts and conventions used across all `{admiral}` functions.
--   Walks through end-to-end examples of how to create each major ADaM dataset
-    type (ADSL, BDS, OCCDS, etc.).
--   Covers special topics such as date/time imputation, lab grading, and
-    estimands.
--   Uses real SDTM data from the
-    [`{pharmaversesdtm}`](https://pharmaverse.github.io/pharmaversesdtm/)
-    package (based on the CDISC Pilot Study) so that all examples are fully
-    reproducible.
+-   Walks through end-to-end examples of how to create each major ADaM dataset type (ADSL, BDS, OCCDS, etc.).
+-   Covers special topics such as date/time imputation, lab grading, and estimands.
+-   Uses real SDTM data from the [`{pharmaversesdtm}`](https://pharmaverse.github.io/pharmaversesdtm/) package (based on the CDISC Pilot Study) so that all examples are fully reproducible.
 
 ## How to use this book
 
 The book is organised into four parts:
 
-1.  **Getting Started** — introduces `{admiral}` and the programming concepts
-    and conventions shared across the entire package.
-2.  **ADaM Data Structures** — step-by-step guides for creating each major ADaM
-    dataset type.
-3.  **Special Topics** — in-depth coverage of specific techniques (imputation,
-    visits, lab grading, etc.).
-4.  **Advanced Topics** — more complex dataset types and frequently asked
-    questions.
+1.  **Getting Started** — introduces `{admiral}` and the programming concepts and conventions shared across the entire package.
+2.  **ADaM Data Structures** — step-by-step guides for creating each major ADaM dataset type.
+3.  **Special Topics** — in-depth coverage of specific techniques (imputation, visits, lab grading, etc.).
+4.  **Advanced Topics** — more complex dataset types and frequently asked questions.
 
-We recommend first-time readers work through the chapters in order. Experienced
-users may prefer to jump directly to the chapter that covers the dataset or
-feature they need.
+We recommend first-time readers work through the chapters in order. Experienced users may prefer to jump directly to the chapter that covers the dataset or feature they need.
 
 ## Prerequisites
 
-To run the code examples in this book you will need R and the following
-packages:
+To run the code examples in this book you will need R and the following packages:
 
-```r
+``` r
 install.packages(c(
   "admiral",
   "pharmaversesdtm",
@@ -64,9 +45,6 @@ install.packages(c(
 
 ## Getting help
 
--   [admiral Slack channel](https://pharmaverse.slack.com/) — for questions and
-    discussion.
--   [GitHub Issues](https://github.com/pharmaverse/admiral/issues) — to report
-    bugs or request features in the package.
--   [Book Issues](https://github.com/pharmaverse/admiral-book/issues) — to
-    report issues with this book.
+-   [admiral Slack channel](https://pharmaverse.slack.com/) — for questions and discussion.
+-   [GitHub Issues](https://github.com/pharmaverse/admiral/issues) — to report bugs or request features in the package.
+-   [Book Issues](https://github.com/pharmaverse/admiral-book/issues) — to report issues with this book.

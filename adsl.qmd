@@ -7,13 +7,10 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## Introduction
 
-This chapter describes creating an `ADSL` ADaM dataset. Examples are presented
-and tested using `DM`, `EX`, `AE`, `LB`, and `DS` SDTM domains. However,
-other domains could be used.
+This chapter describes creating an `ADSL` ADaM dataset. Examples are presented and tested using `DM`, `EX`, `AE`, `LB`, and `DS` SDTM domains. However, other domains could be used.
 
 ::: callout-note
-All examples assume CDISC SDTM and/or ADaM format as input unless otherwise
-specified.
+All examples assume CDISC SDTM and/or ADaM format as input unless otherwise specified.
 :::
 
 ## Programming Flow
@@ -32,12 +29,9 @@ specified.
 
 ## Read in Data {#readdata}
 
-To start, all data frames needed for the creation of `ADSL` should be read into
-the environment. This will be a company-specific process. Some of the data
-frames needed may be `DM`, `EX`, `DS`, `AE`, and `LB`.
+To start, all data frames needed for the creation of `ADSL` should be read into the environment. This will be a company-specific process. Some of the data frames needed may be `DM`, `EX`, `DS`, `AE`, and `LB`.
 
-For example purposes, the CDISC Pilot SDTM datasets — which are included in
-`{pharmaversesdtm}` — are used.
+For example purposes, the CDISC Pilot SDTM datasets — which are included in `{pharmaversesdtm}` — are used.
 
 ```{r load-packages}
 #| message: false
@@ -68,33 +62,24 @@ adsl |>
 
 ## Derive Period, Subperiod, and Phase Variables {#periodvars}
 
-See the [Visit and Period Variables](visits_periods.qmd#periods_adsl) chapter
-for more information.
+See the [Visit and Period Variables](visits_periods.qmd#periods_adsl) chapter for more information.
 
-If the variables are not derived based on a period reference dataset, they may
-be derived at a later point of the flow. For example, phases like "Treatment
-Phase" and "Follow up" could be derived based on treatment start and end date.
+If the variables are not derived based on a period reference dataset, they may be derived at a later point of the flow. For example, phases like "Treatment Phase" and "Follow up" could be derived based on treatment start and end date.
 
 ## Derive Treatment Variables {#treatmentvar}
 
-The mapping of the treatment variables is left to the ADaM programmer. An
-example mapping for a study without periods may be:
+The mapping of the treatment variables is left to the ADaM programmer. An example mapping for a study without periods may be:
 
 ```{r treatment-vars}
 adsl <- dm |>
   mutate(TRT01P = ARM, TRT01A = ACTARM)
 ```
 
-For studies with periods, see the [Visit and Period Variables](visits_periods.qmd#treatment_adsl)
-chapter.
+For studies with periods, see the [Visit and Period Variables](visits_periods.qmd#treatment_adsl) chapter.
 
 ## Derive/Impute Numeric Treatment Date/Time and Duration {#trtdatetime}
 
-The function `derive_vars_merged()` can be used to derive the treatment start
-and end date/times using the `ex` domain. A pre-processing step for `ex` is
-required to convert `EXSTDTC` and `EXENDTC` to datetime variables and impute
-missing date or time components. Conversion and imputation is done by
-`derive_vars_dtm()`.
+The function `derive_vars_merged()` can be used to derive the treatment start and end date/times using the `ex` domain. A pre-processing step for `ex` is required to convert `EXSTDTC` and `EXENDTC` to datetime variables and impute missing date or time components. Conversion and imputation is done by `derive_vars_dtm()`.
 
 ```{r treatment-datetime}
 # Impute start and end time of exposure to first and last respectively
@@ -130,16 +115,14 @@ adsl <- adsl |>
   )
 ```
 
-The datetime variables returned can be converted to dates using
-`derive_vars_dtm_to_dt()`.
+The datetime variables returned can be converted to dates using `derive_vars_dtm_to_dt()`.
 
 ```{r datetime-to-date}
 adsl <- adsl |>
   derive_vars_dtm_to_dt(source_vars = exprs(TRTSDTM, TRTEDTM))
 ```
 
-Now that `TRTSDT` and `TRTEDT` are derived, `derive_var_trtdurd()` can be used
-to calculate the Treatment Duration (`TRTDURD`).
+Now that `TRTSDT` and `TRTEDT` are derived, `derive_var_trtdurd()` can be used to calculate the Treatment Duration (`TRTDURD`).
 
 ```{r trtdurd}
 adsl <- adsl |>
@@ -154,10 +137,7 @@ adsl |>
 
 ### Disposition Dates (e.g. `EOSDT`) {#disposition_date}
 
-The functions `derive_vars_dt()` and `derive_vars_merged()` can be used to
-derive a disposition date. First, the character disposition date
-(`DS.DSSTDTC`) is converted to a numeric date (`EOSDT`) using
-`derive_vars_dt()`.
+The functions `derive_vars_dt()` and `derive_vars_merged()` can be used to derive a disposition date. First, the character disposition date (`DS.DSSTDTC`) is converted to a numeric date (`EOSDT`) using `derive_vars_dt()`.
 
 ```{r eosdt}
 adsl <- adsl |>
@@ -199,8 +179,7 @@ adsl |>
 
 ## Derive Birth Date and Analysis Age {#aage}
 
-The function `derive_vars_dt()` can be used to derive the birth date from
-`BRTHDTC`, and then `derive_vars_age()` can be used to calculate age.
+The function `derive_vars_dt()` can be used to derive the birth date from `BRTHDTC`, and then `derive_vars_age()` can be used to calculate age.
 
 ```{r age}
 adsl <- adsl |>
@@ -223,16 +202,11 @@ adsl <- adsl |>
   derive_vars_merged(
     dataset_add = ds,
     filter_add  = DSDECOD == "DEATH",
-    new_vars    = exprs(DTHDTC = DSSTDTC),
-    by_vars     = exprs(STUDYID, USUBJID)
-  ) |>
-  derive_vars_dt(
-    new_vars_prefix = "DTH",
-    dtc             = DTHDTC
-  )
+    by_vars     = exprs(DOMAIN, STUDYID, USUBJID)
+  )  
 
 adsl |>
-  select(USUBJID, DTHDTC, DTHDT) |>
+  select(USUBJID, DTHDTC) |>
   head(5)
 ```
 
@@ -282,22 +256,17 @@ adsl |>
 
 ## Add Labels and Attributes {#attributes}
 
-Note that attributes may not be preserved in some cases after processing with
-`{admiral}`. The recommended approach is to apply variable labels and other
-metadata as a final step in your data derivation process using packages like:
+Note that attributes may not be preserved in some cases after processing with `{admiral}`. The recommended approach is to apply variable labels and other metadata as a final step in your data derivation process using packages like:
 
--   [metacore](https://atorus-research.github.io/metacore/): establish a common
-    foundation for the use of metadata within an R session.
--   [metatools](https://pharmaverse.github.io/metatools/): enable the use of
-    metacore objects to build datasets or enhance existing datasets.
--   [xportr](https://atorus-research.github.io/xportr/): associate all metadata
-    information to a local R data frame and convert to a transport v5 file.
+-   [metacore](https://atorus-research.github.io/metacore/): establish a common foundation for the use of metadata within an R session.
+-   [metatools](https://pharmaverse.github.io/metatools/): enable the use of metacore objects to build datasets or enhance existing datasets.
+-   [xportr](https://atorus-research.github.io/xportr/): associate all metadata information to a local R data frame and convert to a transport v5 file.
 
 ## Example Script
 
 An ADSL template script is available in the `{admiral}` package:
 
-```r
+``` r
 use_ad_template("ADSL")
 ```
 
