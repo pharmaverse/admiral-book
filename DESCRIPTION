@@ -1,0 +1,22 @@
+Package: admiralbook
+Title: The admiral Book
+Version: 0.0.0.9000
+Description: Source for The admiral Book.
+Authors@R: c(
+    person("admiral team", role = c("aut", "cre"),
+           email = "admiral@pharmaverse.org",
+           comment = c(affiliation = "Pharmaverse"))
+  )
+License: CC BY 4.0
+Imports:
+    admiral,
+    dplyr,
+    lubridate,
+    pharmaversesdtm,
+    rlang,
+    stringr,
+    tibble
+Suggests:
+    knitr,
+    rmarkdown
+Encoding: UTF-8
